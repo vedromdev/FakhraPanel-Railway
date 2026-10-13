@@ -1,6 +1,7 @@
 """Enforcement jobs: expiry/quota evaluation, the stats cycle, and its loop."""
 
 import json
+import logging
 import time
 from datetime import datetime, timezone
 
@@ -76,14 +77,16 @@ class FakeStats:
 
 
 class FakeManager:
-    """Records every apply_config call; always reports success."""
+    """Records every apply_config call; returns a configurable (ok, msg)."""
 
-    def __init__(self):
+    def __init__(self, ok=True, msg="ok"):
+        self.ok = ok
+        self.msg = msg
         self.applied = []
 
     def apply_config(self, users):
         self.applied.append([dict(user) for user in users])
-        return True, "ok"
+        return self.ok, self.msg
 
 
 # --- evaluate ----------------------------------------------------------------
@@ -197,6 +200,46 @@ def test_run_cycle_survives_stats_error(live_db):
     assert row["used_bytes"] == 42
     assert row["enabled"] == 1
     assert manager.applied == []
+
+
+def test_run_cycle_enforces_expiry_even_when_stats_fails(live_db):
+    # "Stats down, enforcement lives": a dead stats service must not stall
+    # expiry enforcement — evaluate still runs and xray gets the update.
+    db.create_user(_user("goner", expires_at="2025-01-01T00:00:00+00:00"))
+    db.create_user(_user("keeper", expires_at="2027-01-01T00:00:00+00:00"))
+    manager = FakeManager()
+    stats = FakeStats(error=StatsError("xray unreachable"))
+
+    assert jobs.run_cycle(live_db, manager, stats, now=NOW) == 1
+
+    row = db.get_user("goner")
+    assert row["enabled"] == 0
+    assert row["disable_reason"] == "expired"
+    assert db.get_user("keeper")["enabled"] == 1
+
+    # apply_config was called exactly once, with the post-disable user list.
+    assert len(manager.applied) == 1
+    assert {u["id"]: u["enabled"] for u in manager.applied[-1]} == {
+        "goner": 0,
+        "keeper": 1,
+    }
+
+
+def test_run_cycle_logs_failed_apply_config(live_db, caplog):
+    # The DB disable happens before the xray swap; a rejected swap means xray
+    # keeps serving the old config — that divergence must be logged loudly.
+    db.create_user(_user("goner", expires_at="2025-01-01T00:00:00+00:00"))
+    manager = FakeManager(ok=False, msg="xray config test failed: INVALID_CONFIG")
+
+    with caplog.at_level(logging.ERROR, logger="panel.jobs"):
+        assert jobs.run_cycle(live_db, manager, FakeStats(value=1), now=NOW) == 1
+
+    errors = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno >= logging.ERROR
+    ]
+    assert any("xray config test failed" in msg for msg in errors), errors
 
 
 # --- lifespan loop -----------------------------------------------------------

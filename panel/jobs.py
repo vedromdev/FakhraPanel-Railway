@@ -83,5 +83,9 @@ def run_cycle(
     for user_id, reason in hits.items():
         db.update_user(user_id, {"enabled": 0, "disable_reason": reason})
     if hits:
-        manager.apply_config(db.list_users())
+        ok, msg = manager.apply_config(db.list_users())
+        if not ok:
+            # DB now has users disabled while xray keeps serving the old
+            # config (rolled back) — the divergence must be visible.
+            logger.error("apply_config failed after disabling users: %s", msg)
     return len(hits)

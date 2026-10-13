@@ -58,7 +58,13 @@ def create_app(settings: Settings) -> FastAPI:
             while True:
                 await asyncio.sleep(jobs.TICK_SECONDS)
                 try:
-                    jobs.run_cycle(settings, manager, stats_client)
+                    # Off the event loop: a tick makes blocking gRPC calls
+                    # (bounded, but the panel UI must stay responsive).
+                    # CancelledError derives from BaseException, so shutdown
+                    # cancellation passes through this catch untouched.
+                    await asyncio.to_thread(
+                        jobs.run_cycle, settings, manager, stats_client
+                    )
                 except Exception:  # a failing tick must never kill the loop
                     logger.exception("jobs tick failed; loop continues")
 
