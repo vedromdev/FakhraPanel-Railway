@@ -1,16 +1,21 @@
 """Application factory: lifespan wiring, app state, and the global 401 handler."""
 
+import asyncio
+import logging
 import secrets
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from panel import bootstrap, db
+from panel import bootstrap, db, jobs
 from panel.config import Settings
 from panel.ratelimit import RateLimiter
 from panel.routes_auth import router as auth_router
 from panel.xray.manager import XrayManager
+from panel.xray.stats import StatsClient
+
+logger = logging.getLogger(__name__)
 
 
 async def handle_unauthenticated(
@@ -44,7 +49,25 @@ def create_app(settings: Settings) -> FastAPI:
             manager.apply_config(db.list_users())
         manager.start_monitor()
         app.state.manager = manager
+
+        # One long-lived stats client for every tick (never per-tick).
+        stats_client = StatsClient()
+        app.state.stats = stats_client
+
+        async def jobs_loop() -> None:
+            while True:
+                await asyncio.sleep(jobs.TICK_SECONDS)
+                try:
+                    jobs.run_cycle(settings, manager, stats_client)
+                except Exception:  # a failing tick must never kill the loop
+                    logger.exception("jobs tick failed; loop continues")
+
+        jobs_task = asyncio.create_task(jobs_loop())
+        app.state.jobs_task = jobs_task
         yield
+        jobs_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await jobs_task
         manager.stop()
 
     app = FastAPI(lifespan=lifespan)
