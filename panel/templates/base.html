@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Fakhra Panel{% endblock %}</title>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f4f5f7;
+      color: #1c1e21;
+    }
+    .card {
+      width: 20rem;
+      padding: 2rem;
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 1px 4px rgb(0 0 0 / 12%);
+    }
+    h1 {
+      margin-top: 0;
+      font-size: 1.25rem;
+      text-align: center;
+    }
+    form {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    label {
+      font-size: 0.875rem;
+      font-weight: 600;
+    }
+    input {
+      padding: 0.5rem;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 1rem;
+    }
+    button {
+      padding: 0.6rem;
+      border: 0;
+      border-radius: 4px;
+      background: #2563eb;
+      color: #fff;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+    .error {
+      margin: 0 0 0.5rem;
+      padding: 0.5rem;
+      border-radius: 4px;
+      background: #fdecea;
+      color: #b3261e;
+      font-size: 0.875rem;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  {% block content %}{% endblock %}
+</body>
+</html>
