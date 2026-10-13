@@ -104,13 +104,16 @@ def build_config(users: list[dict], install_token: str, public_host: str) -> dic
         # Xray auto-builds the "api" outbound from api.tag; freedom is the
         # only explicit outbound (real xray rejects a literal api outbound).
         "outbounds": [{"protocol": "freedom"}],
+        # routing.rules: NO "protocol" condition — Xray 26 has no "api"
+        # protocol sniffer, so "protocol": ["api"] never matches and api
+        # traffic falls through to freedom (looping back into this inbound).
+        # InboundTag-only is what Xray's own command_test.go uses.
         "routing": {
             "rules": [
                 {
                     "type": "field",
                     "inboundTag": ["api"],
                     "outboundTag": "api",
-                    "protocol": ["api"],
                 }
             ]
         },

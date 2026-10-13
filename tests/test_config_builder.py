@@ -163,8 +163,13 @@ def test_api_and_stats_configured():
         }
     ]
     assert PORTS["stats"] == 10010
-    assert {"type": "field", "inboundTag": ["api"], "outboundTag": "api",
-            "protocol": ["api"]} in cfg["routing"]["rules"]
+    api_rules = [r for r in cfg["routing"]["rules"] if r.get("inboundTag") == ["api"]]
+    # AMENDED 2026-10-14: no "protocol" condition — Xray 26 has no "api"
+    # protocol sniffer, so "protocol": ["api"] never matched and api traffic
+    # looped through freedom (StatsService unreachable; real-binary probe).
+    assert api_rules == [{"type": "field", "inboundTag": ["api"],
+                          "outboundTag": "api"}]
+    assert all("protocol" not in r for r in api_rules)
     # the api outbound is auto-built from api.tag; only freedom is explicit
     assert cfg["outbounds"] == [{"protocol": "freedom"}]
 
