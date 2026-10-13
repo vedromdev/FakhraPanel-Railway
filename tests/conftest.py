@@ -1,6 +1,18 @@
+from pathlib import Path
+
 import pytest
 
 from panel.config import Settings
+
+_FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
+
+
+@pytest.fixture
+def fake_xray() -> str:
+    """Absolute path to an executable fake xray (tests never spawn a real one)."""
+    script = _FIXTURES_DIR / "fake_xray.sh"
+    script.chmod(script.stat().st_mode | 0o111)
+    return str(script)
 
 
 @pytest.fixture
