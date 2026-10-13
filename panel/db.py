@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
 );
 CREATE TABLE IF NOT EXISTS user_sessions (
   token TEXT PRIMARY KEY,
-  user_id TEXT REFERENCES users(id),
+  user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
   created_at TEXT NOT NULL,
   expires_at TEXT NOT NULL
 );
@@ -191,6 +191,18 @@ def delete_user(user_id: str) -> bool:
         conn.close()
 
 
+def read_meta(key: str) -> str | None:
+    """Read a meta value without ever writing."""
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key = ?", (key,)
+        ).fetchone()
+        return row["value"] if row is not None else None
+    finally:
+        conn.close()
+
+
 def get_or_create_meta(key: str, factory: Callable[[], str]) -> str:
     conn = _connect()
     try:
@@ -210,7 +222,9 @@ def get_or_create_meta(key: str, factory: Callable[[], str]) -> str:
 
 
 def _hash_token(raw_token: str) -> str:
-    secret = get_or_create_meta("secret_key", lambda: secrets.token_urlsafe(32))
+    secret = read_meta("secret_key")
+    if not secret:
+        raise RuntimeError("secret_key not initialized; run bootstrap.ensure_runtime")
     return hmac.new(
         secret.encode("utf-8"), raw_token.encode("utf-8"), hashlib.sha256
     ).hexdigest()

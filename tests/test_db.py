@@ -96,6 +96,35 @@ def test_install_token_stable_across_restarts(settings):
     second = db.get_or_create_meta("install_token", lambda: "unused-factory-call")
     assert first == second
     assert first != "unused-factory-call"
+    # ensure_runtime seeds schema_version; a different factory proves it pre-existed
+    assert db.get_or_create_meta("schema_version", lambda: "other") == "1"
+
+
+def test_delete_user_cascades_sessions(settings):
+    user = _vless_user()
+    db.create_user(user)
+    raw = db.create_session("user", user["id"], ttl_days=1)
+    assert db.get_session("user", raw) is not None
+    assert db.delete_user(user["id"]) is True
+    assert db.get_session("user", raw) is None
+
+
+def test_session_ops_require_initialized_secret(tmp_path):
+    # a DB from init_db alone (no ensure_runtime) has no secret_key yet
+    db.init_db(tmp_path / "bare.db")
+    with pytest.raises(RuntimeError, match="secret_key"):
+        db.get_session("admin", "any-token")
+    with pytest.raises(RuntimeError, match="secret_key"):
+        db.create_session("admin", None, ttl_days=1)
+    # ... and session ops must not silently mint one
+    conn = sqlite3.connect(tmp_path / "bare.db")
+    try:
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key = ?", ("secret_key",)
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is None
 
 
 def test_session_roundtrip_and_expiry(settings):
