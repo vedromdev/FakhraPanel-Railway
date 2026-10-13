@@ -50,12 +50,30 @@ def test_link_fields_pinned_all_protocols(protocol):
             "path", "tls", "sni",
         }
     else:
-        assert ":443" in link
-        assert "security=tls" in link
-        assert "sni=fakhra.railway.app" in link
-        assert "type=ws" in link
-        assert quote(path, safe="") in link  # percent-encoded /ray-<token>/<proto>
-        assert link.endswith("#" + quote(user["username"]))
+        # Full exact-string pin: catches a lost/reordered/duplicated query param
+        # (e.g. encryption=none vanishing from vless, or spreading to
+        # trojan/ss) that substring asserts would miss. Strictly stronger
+        # than the substring checks this replaces.
+        fragment = quote(user["username"])
+        encoded_path = quote(path, safe="")  # percent-encoded /ray-<token>/<proto>
+        stream = (
+            f"?security=tls&sni={PUBLIC_HOST}&type=ws&host={PUBLIC_HOST}"
+            f"&path={encoded_path}"
+        )
+        if protocol == "vless":
+            expected = (
+                f"vless://{user['uuid']}@{PUBLIC_HOST}:443"
+                f"?encryption=none&security=tls&sni={PUBLIC_HOST}&type=ws"
+                f"&host={PUBLIC_HOST}&path={encoded_path}#{fragment}"
+            )
+        elif protocol == "trojan":
+            expected = f"trojan://{user['credential']}@{PUBLIC_HOST}:443{stream}#{fragment}"
+        else:  # ss — b64url(method:credential) userinfo, NULL ss_method -> shared default
+            userinfo = base64.urlsafe_b64encode(
+                f"aes-256-gcm:{user['credential']}".encode()
+            ).decode()
+            expected = f"ss://{userinfo}@{PUBLIC_HOST}:443{stream}#{fragment}"
+        assert link == expected
 
 
 def test_vless_uri_parses_with_urllib():
