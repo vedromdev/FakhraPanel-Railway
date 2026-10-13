@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.templating import Jinja2Templates
 
 from panel import auth, db
+from panel.ratelimit import rate_limit_key
 
 templates = Jinja2Templates(
     directory=str(Path(__file__).resolve().parent / "templates")
@@ -41,7 +42,7 @@ async def login_submit(
     password: str = Form(...),
 ):
     settings = request.app.state.settings
-    ip = request.client.host if request.client else "unknown"
+    ip = rate_limit_key(request)
     if not request.app.state.rate.allow(ip):
         return _login_page(request, ERROR_RATE_LIMITED, status_code=429)
     if not auth.authenticate_admin(username, password, settings):

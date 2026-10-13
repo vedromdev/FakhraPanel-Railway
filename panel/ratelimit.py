@@ -5,6 +5,21 @@ import time
 from collections import defaultdict
 from collections.abc import Callable
 
+from fastapi import Request
+
+
+def rate_limit_key(request: Request) -> str:
+    """Per-client rate-limit key for a request.
+
+    Rightmost ``X-Forwarded-For`` entry = the real client IP appended by the
+    trusted edge (Railway); the leftmost entries are client-spoofable.
+    Falls back to the direct peer address when no header is present.
+    """
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[-1].strip()
+    return request.client.host if request.client else "unknown"
+
 
 class RateLimiter:
     """Allow at most ``max_calls`` per key inside a sliding ``window_s`` window."""
