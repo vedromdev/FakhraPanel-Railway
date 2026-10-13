@@ -1,0 +1,11 @@
+# Generated gRPC stubs — rebuild with: bash scripts/gen_protos.sh
+panel/xray/pb/
+
+# Downloaded Xray binary — rebuild with: bash scripts/fetch_xray.sh
+.bin/
+
+# Runtime data (SQLite DB, xray config, session files)
+data/
+
+__pycache__/
+.env
