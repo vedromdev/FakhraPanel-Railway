@@ -9,6 +9,7 @@ import os
 import shutil
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -39,7 +40,8 @@ class XrayManager:
 
         self._xray_dir = settings.data_dir() / "xray"
         self._xray_dir.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
+        # RLock: apply_config holds it across restart()/start(), which re-enter.
+        self._lock = threading.RLock()
         self._proc: subprocess.Popen | None = None
         self._log_fh = None
         self._started_at: float | None = None
@@ -88,11 +90,14 @@ class XrayManager:
     def apply_config(self, users: list[dict]) -> tuple[bool, str]:
         """Build → write candidate → test → atomic swap → restart.
 
-        Never raises for expected failures (bad config, restart failure):
-        always returns (success, message) and records `last_error`.
+        Serialized by the manager lock so concurrent callers can't share (and
+        lose) the candidate file. Never raises for expected failures (bad
+        config, restart failure): always returns (success, message) and
+        records `last_error`.
         """
         try:
-            return self._apply_config(users)
+            with self._lock:
+                return self._apply_config(users)
         except Exception as exc:  # contract: callers get (False, reason), not a raise
             self.last_error = f"apply_config failed: {exc}"
             return False, self.last_error
@@ -101,30 +106,41 @@ class XrayManager:
         cfg = config_builder.build_config(
             users, self.install_token, self.public_host
         )
-        candidate = self.candidate_path
-        config_builder.write_config(candidate, cfg)
+        # Unique candidate per call, in the same dir as config.json so the
+        # swap below stays a same-filesystem atomic os.replace.
+        fd, name = tempfile.mkstemp(
+            dir=self._xray_dir, prefix="config-", suffix=".next.json"
+        )
+        os.close(fd)
+        candidate = Path(name)
+        try:
+            config_builder.write_config(candidate, cfg)
 
-        ok, output = self.test_config_file(candidate)
-        if not ok:
-            candidate.unlink(missing_ok=True)  # old config untouched
-            self.last_error = output
-            return False, output
+            ok, output = self.test_config_file(candidate)
+            if not ok:
+                self.last_error = output  # old config untouched
+                return False, output
 
-        # Test passed: keep the current file as backup, then swap atomically.
-        had_previous = self.config_path.exists()
-        if had_previous:
-            shutil.copy2(self.config_path, self.backup_path)
-        os.replace(candidate, self.config_path)
-
-        if not self.restart():
-            reason = self.last_error or "xray restart failed"
+            # Test passed: keep the current file as backup, then swap atomically.
+            had_previous = self.config_path.exists()
             if had_previous:
-                shutil.copy2(self.backup_path, self.config_path)  # restore
-                self.start()  # keep the old config serving
-            return False, reason
+                shutil.copy2(self.config_path, self.backup_path)
+            os.replace(candidate, self.config_path)
 
-        self.last_error = ""
-        return True, "ok"
+            if not self.restart():
+                reason = self.last_error or "xray restart failed"
+                if had_previous:
+                    shutil.copy2(self.backup_path, self.config_path)  # restore
+                    # last_error intentionally persists after a successful
+                    # rollback: the old config keeps serving while the error
+                    # stays visible for the Task 9 banner.
+                    self.start()  # keep the old config serving
+                return False, reason
+
+            self.last_error = ""
+            return True, "ok"
+        finally:
+            candidate.unlink(missing_ok=True)  # consumed by replace; else stale
 
     def start(self) -> bool:
         """Spawn xray with the current config; no double-spawn."""

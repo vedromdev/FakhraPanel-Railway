@@ -26,6 +26,12 @@ case " $* " in
         ;;
 esac
 
+# run mode: a config that passed -test may still be asked to die immediately
+if grep -q '"DIE_ON_RUN"' "$cfg"; then
+    echo "fake-xray: dying on run as instructed" >&2
+    exit 1
+fi
+
 # run mode: pretend to serve until told to stop
 trap 'exit 0' TERM INT
 while true; do sleep 1; done
