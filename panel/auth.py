@@ -2,6 +2,7 @@
 
 import secrets
 
+import bcrypt
 from fastapi import HTTPException, Request
 
 from panel import db
@@ -9,6 +10,21 @@ from panel.config import Settings
 
 ADMIN_COOKIE = "fakhra_admin"
 USER_COOKIE = "fakhra_user"
+
+
+def hash_password(plain: str) -> str:
+    """Bcrypt-hash a password (cost=12 default); returns the `$2b$...` string."""
+    return bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt()).decode("ascii")
+
+
+def verify_password(plain: str, hashed: str | None) -> bool:
+    """False for wrong passwords and for malformed/None hashes (never raises)."""
+    if not hashed:
+        return False
+    try:
+        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+    except (ValueError, TypeError):
+        return False
 
 
 def authenticate_admin(username: str, password: str, settings: Settings) -> bool:

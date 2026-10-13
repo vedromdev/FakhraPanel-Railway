@@ -75,9 +75,3 @@ async def logout(request: Request):
 async def root():
     # Placeholder until the dashboard route lands.
     return JSONResponse({"detail": "Fakhra Panel"})
-
-
-@router.get("/api/users", dependencies=[Depends(auth.require_admin)])
-async def list_users_placeholder():
-    # Placeholder until the real user API lands.
-    return {"users": []}

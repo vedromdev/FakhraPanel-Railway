@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from panel import bootstrap, db, jobs
 from panel.config import Settings
 from panel.ratelimit import RateLimiter
+from panel.routes_admin import health_router, router as admin_router
 from panel.routes_auth import router as auth_router
 from panel.xray.manager import XrayManager
 from panel.xray.stats import StatsClient
@@ -79,4 +80,6 @@ def create_app(settings: Settings) -> FastAPI:
     app = FastAPI(lifespan=lifespan)
     app.add_exception_handler(401, handle_unauthenticated)
     app.include_router(auth_router)
+    app.include_router(admin_router)
+    app.include_router(health_router)
     return app
