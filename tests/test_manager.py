@@ -127,6 +127,62 @@ def test_apply_config_safe_under_concurrency(manager, monkeypatch):
     assert not list(manager.config_path.parent.glob("config-*.next.json"))
 
 
+def test_apply_config_refused_after_stop(manager):
+    ok, msg = manager.apply_config([_user()])
+    assert ok, msg
+    assert manager.pid is not None
+
+    manager.stop()
+    assert manager.pid is None
+    config_before = manager.config_path.read_bytes()
+
+    ok, msg = manager.apply_config([_user(username="bob", uuid=UUID2)])
+
+    # A stopped manager must refuse, spawn nothing, and mutate nothing.
+    assert (ok, msg) == (False, "manager stopped")
+    assert manager.pid is None
+    assert not manager.is_running()
+    assert manager.config_path.read_bytes() == config_before
+
+
+def test_apply_config_refused_from_other_thread_after_stop(manager):
+    # The detached to_thread worker scenario: stop() first, then apply from
+    # another thread — the ordering guard must refuse the late apply.
+    ok, msg = manager.apply_config([_user()])
+    assert ok, msg
+    manager.stop()
+    config_before = manager.config_path.read_bytes()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        result = pool.submit(
+            manager.apply_config, [_user(username="bob", uuid=UUID2)]
+        ).result(timeout=15)
+
+    assert result == (False, "manager stopped")
+    assert manager.pid is None
+    assert not manager.is_running()
+    assert manager.config_path.read_bytes() == config_before
+
+
+def test_start_after_stop_rearms_apply_config(manager):
+    ok, _ = manager.apply_config([_user()])
+    assert ok
+    manager.stop()
+    assert manager.apply_config([_user(username="bob", uuid=UUID2)]) == (
+        False,
+        "manager stopped",
+    )
+
+    # start() re-arms: first-boot and second-lifespan re-entry paths work.
+    assert manager.start()
+    assert manager.is_running()
+
+    ok, msg = manager.apply_config([_user(username="bob", uuid=UUID2)])
+    assert ok, msg
+    assert UUID2 in manager.config_path.read_text(encoding="utf-8")
+    assert manager.is_running()
+
+
 def test_restart_failure_restores_backup_and_keeps_serving(manager, monkeypatch):
     ok, msg = manager.apply_config([_user()])
     assert ok, msg

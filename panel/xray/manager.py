@@ -42,6 +42,10 @@ class XrayManager:
         self._xray_dir.mkdir(parents=True, exist_ok=True)
         # RLock: apply_config holds it across restart()/start(), which re-enter.
         self._lock = threading.RLock()
+        # Running-ready by default: the first-boot path calls apply_config
+        # before start(). Set True by stop(), cleared by start() — a stopped
+        # manager must not spawn or mutate config (see apply_config/_spawn).
+        self._stopped: bool = False
         self._proc: subprocess.Popen | None = None
         self._log_fh = None
         self._started_at: float | None = None
@@ -97,6 +101,11 @@ class XrayManager:
         """
         try:
             with self._lock:
+                if self._stopped:
+                    # stop() is terminal for this running period: a detached
+                    # jobs worker arriving late must not respawn xray or
+                    # touch config files after shutdown.
+                    return False, "manager stopped"
                 return self._apply_config(users)
         except Exception as exc:  # contract: callers get (False, reason), not a raise
             self.last_error = f"apply_config failed: {exc}"
@@ -143,8 +152,13 @@ class XrayManager:
             candidate.unlink(missing_ok=True)  # consumed by replace; else stale
 
     def start(self) -> bool:
-        """Spawn xray with the current config; no double-spawn."""
+        """Spawn xray with the current config; no double-spawn.
+
+        Also re-arms a stopped manager (clears `_stopped`) so second-lifespan
+        and test re-entry paths work.
+        """
         with self._lock:
+            self._stopped = False
             if self.is_running():
                 return True
             self._stop_process()  # reap a dead predecessor, close its log handle
@@ -157,6 +171,7 @@ class XrayManager:
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=2.0)
         with self._lock:
+            self._stopped = True  # before killing: lock waiters see it on entry
             self._stop_process()
 
     def restart(self) -> bool:
@@ -204,7 +219,7 @@ class XrayManager:
             if self._monitor_stop.wait(delay):
                 break
             with self._lock:
-                if self._monitor_stop.is_set():
+                if self._monitor_stop.is_set() or self._stopped:
                     break
                 if self.is_running():
                     continue
@@ -213,6 +228,9 @@ class XrayManager:
                     self.last_error = ""
 
     def _spawn(self) -> bool:
+        if self._stopped:  # belt and braces: never respawn a stopped manager
+            self.last_error = "xray manager stopped; refusing to spawn"
+            return False
         if not self.config_path.exists():
             self.last_error = f"config not found: {self.config_path}"
             return False
