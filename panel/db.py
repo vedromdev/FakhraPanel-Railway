@@ -8,6 +8,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Literal
 
+from panel.constants import DEFAULT_SS_METHOD
+
 _db_path: Path | None = None
 
 _USER_COLUMNS = (
@@ -28,7 +30,7 @@ _USER_COLUMNS = (
     "created_at",
 )
 
-_SCHEMA = """
+_SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   username TEXT UNIQUE NOT NULL,
@@ -36,7 +38,7 @@ CREATE TABLE IF NOT EXISTS users (
   protocol TEXT NOT NULL CHECK (protocol IN ('vless','vmess','trojan','ss')),
   uuid TEXT,
   credential TEXT,
-  ss_method TEXT DEFAULT 'aes-256-gcm',
+  ss_method TEXT DEFAULT '{DEFAULT_SS_METHOD}',
   enabled INTEGER DEFAULT 1,
   disable_reason TEXT,
   expires_at TEXT,

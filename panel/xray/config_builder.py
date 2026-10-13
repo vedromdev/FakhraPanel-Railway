@@ -6,6 +6,7 @@ Pure functions: plain arguments in, plain dicts out — no settings, env, or DB.
 import json
 from pathlib import Path
 
+from panel.constants import DEFAULT_SS_METHOD
 from panel.paths import PORTS, vpn_path
 
 LISTEN = "127.0.0.1"
@@ -29,7 +30,7 @@ def _client(protocol: str, user: dict) -> dict:
     elif protocol == "trojan":
         client["password"] = user["credential"]
     else:  # ss
-        client["method"] = user["ss_method"] or "aes-128-gcm"
+        client["method"] = user["ss_method"] or DEFAULT_SS_METHOD
         client["password"] = user["credential"]
     return client
 

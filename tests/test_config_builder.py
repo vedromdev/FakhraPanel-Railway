@@ -9,12 +9,15 @@ from pathlib import Path
 
 import pytest
 
+from panel import db
+from panel.constants import DEFAULT_SS_METHOD
 from panel.paths import PORTS, vpn_path
 from panel.xray.config_builder import build_config, write_config
 
 INSTALL_TOKEN = "tok-abc123"
 PUBLIC_HOST = "fakhra.railway.app"
 PROTOCOLS = ["vless", "vmess", "trojan", "ss"]
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _user(protocol: str, *, user_id: str | None = None, enabled: int = 1) -> dict:
@@ -33,12 +36,12 @@ def _user(protocol: str, *, user_id: str | None = None, enabled: int = 1) -> dic
 
 
 def _find_xray() -> str | None:
-    """Locate a real Xray binary: XRAY_BIN env, ./.bin/xray, or PATH."""
+    """Locate a real Xray binary: XRAY_BIN env, <repo>/.bin/xray, or PATH."""
     candidates = []
     env_bin = os.environ.get("XRAY_BIN")
     if env_bin:
         candidates.append(env_bin)
-    candidates.append(str(Path(".bin") / "xray"))
+    candidates.append(str(REPO_ROOT / ".bin" / "xray"))
     on_path = shutil.which("xray")
     if on_path:
         candidates.append(on_path)
@@ -124,6 +127,18 @@ def test_alterid_absent_everywhere():
     assert "alterId" not in serialized
 
 
+def test_builder_ss_fallback_uses_shared_constant():
+    user = _user("ss")
+    user["ss_method"] = None  # NULL in db -> builder must use the shared default
+    cfg = build_config([user], INSTALL_TOKEN, PUBLIC_HOST)
+    client = cfg["inbounds"][0]["settings"]["clients"][0]
+    assert client["method"] == DEFAULT_SS_METHOD
+
+
+def test_schema_default_matches_shared_constant():
+    assert f"DEFAULT '{DEFAULT_SS_METHOD}'" in db._SCHEMA
+
+
 def test_api_and_stats_configured():
     cfg = build_config([_user("vless")], INSTALL_TOKEN, PUBLIC_HOST)
     assert cfg["log"] == {"loglevel": "error"}
@@ -182,3 +197,54 @@ def test_config_passes_real_xray_test(tmp_path, protocol):
     assert result.returncode == 0, (
         f"xray rejected config:\nstdout: {result.stdout}\nstderr: {result.stderr}"
     )
+
+
+@pytest.mark.skipif(
+    XRAY_BIN is None,
+    reason="xray binary not found (run: bash scripts/fetch_xray.sh)",
+)
+def test_combined_config_passes_real_xray_test(tmp_path):
+    """The shipped shape — all 4 protocols + disabled users — accepted by real xray."""
+    users = []
+    for protocol in PROTOCOLS:
+        users.append(_user(protocol, user_id=f"{protocol}-enabled"))
+        users.append(_user(protocol, user_id=f"{protocol}-disabled", enabled=0))
+    cfg = build_config(users, INSTALL_TOKEN, PUBLIC_HOST)
+    serialized = json.dumps(cfg)
+    for user in users:
+        # vless/vmess configs carry the uuid; trojan/ss configs carry the credential
+        secret = (
+            user["uuid"] if user["protocol"] in ("vless", "vmess")
+            else user["credential"]
+        )
+        if user["enabled"]:
+            assert secret in serialized
+        else:
+            assert user["uuid"] not in serialized
+            assert user["credential"] not in serialized
+    cfg_path = tmp_path / "xray.json"
+    write_config(cfg_path, cfg)
+    result = subprocess.run(
+        [XRAY_BIN, "run", "-test", "-c", str(cfg_path)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, (
+        f"xray rejected config:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+@pytest.mark.skipif(
+    not (REPO_ROOT / ".bin" / "xray").exists(),
+    reason="repo .bin/xray not fetched (run: bash scripts/fetch_xray.sh)",
+)
+def test_find_xray_resolves_from_repo_root_not_cwd(tmp_path, monkeypatch):
+    monkeypatch.delenv("XRAY_BIN", raising=False)
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    monkeypatch.chdir(tmp_path)  # CWD no longer contains .bin/xray
+    found = _find_xray()
+    assert found is not None
+    resolved = Path(found)
+    assert resolved.is_absolute()
+    assert REPO_ROOT in resolved.parents
