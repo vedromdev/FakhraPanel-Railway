@@ -306,21 +306,21 @@ git commit -m "feat: xray manager with test-before-swap config lifecycle and rol
 - Produces:
   - `scripts/gen_protos.sh` — `python3 -m grpc_tools.protoc -I proto --python_out=panel/xray/pb --grpc_python_out=panel/xray/pb proto/app/stats/command.proto` (+ any imported files), creates `panel/xray/pb/__init__.py`.
   - `panel/xray/stats.py`:
-    - `stats.stat_name(user_id: str, protocol: str) -> str` → `f"user<<{user_id}>>@in-{protocol}"`
+    - `stats.stat_name(email: str, direction: str) -> str` → `f"user>>>{email}>>>traffic>>>{direction}"` (direction ∈ {"uplink","downlink"}). AMENDED 2026-10-14: original plan pinned `f"user<<{user_id}>>@in-{protocol}"` — a counter name Xray never registers, so per-user stats would return NOT_FOUND forever (silent zero traffic). Client `email` = user id (config_builder), Xray's documented per-user counter convention is `user>>>email>>>traffic>>>direction`. Exact literal (incl. whether brackets wrap the email) MUST be confirmed by a real-binary probe in Task 6 fix round and locked by the test.
     - `stats.compute_delta(raw: int, last_raw: int, used_bytes: int) -> tuple[int, int]` — `raw >= last_raw` → `(used + (raw - last_raw), raw)`; else → `(used + raw, raw)`.
     - `stats.StatsError(Exception)`
-    - `class StatsClient`: `__init__(self, addr: str = "127.0.0.1:10010", channel_factory=None)` (factory injectable for tests); `get_bytes(user_id: str, protocol: str) -> int` (gRPC `GetStats`, `name=stat_name(...)`, `reset=False` → `stat.value`); `get_inbound_bytes(protocol: str) -> int` (name `f"inbound>>>in-{protocol}>>>traffic>>>uplink"`); raises `StatsError` on RPC failure.
+    - `class StatsClient`: `__init__(self, addr: str = "127.0.0.1:10010", channel_factory=None)` (factory injectable for tests); `get_bytes(user_id: str) -> int` (AMENDED 2026-10-14: queries BOTH `stat_name(user_id, "uplink")` and `stat_name(user_id, "downlink")` and sums — traffic quota counts up+down; protocol arg dropped, the email-keyed counter is protocol-independent; per-direction gRPC NOT_FOUND → that side counts 0, both missing → 0; transport-level RpcError still → StatsError); `get_inbound_bytes(protocol: str) -> int` (name `f"inbound>>>in-{protocol}>>>traffic>>>uplink"`); raises `StatsError` on RPC failure.
   - Generated stubs imported as `panel.xray.pb.command_pb2` / `command_pb2_grpc` — produced by `gen_protos.sh` (Dockerfile runs it; local dev runs it once).
 
 - [ ] **Step 1: Write failing tests**
 
 `tests/test_stats.py`:
-- `test_stat_name_format` — `stat_name("u-1", "vless") == "user<<u-1>>@in-vless"`.
+- `test_stat_name_format` — `stat_name("u-1", "uplink") == "user>>>u-1>>>traffic>>>uplink"` (AMENDED 2026-10-14 with the interface; literal locked by real-binary probe).
 - `test_compute_delta_normal` — `(1000, 400, 5000)` → `(5600, 1000)`.
 - `test_compute_delta_reset` — **(Review Focus #3)** `(300, 5_000_000, 10_000)` → `(10_300, 300)`.
 - `test_compute_delta_first_seen` — `(0, 0, 0)` → `(0, 0)`.
-- `test_get_bytes_uses_stub_response` — fake channel/stub returns `value=1234` → `get_bytes(...) == 1234`; requested `name == stat_name(...)`.
-- `test_get_bytes_raises_stats_error_on_rpc_failure` — fake stub raises → `pytest.raises(StatsError)`.
+- `test_get_bytes_sums_both_directions` — fake channel returns uplink=1000, downlink=234 → `get_bytes(...) == 1234`; both direction names requested (AMENDED 2026-10-14: replaces the old single-counter assertion).
+- `test_get_bytes_not_found_returns_0` — both directions NOT_FOUND → `0`; transport failure → StatsError (AMENDED 2026-10-14: replaces `test_get_bytes_raises_stats_error_on_rpc_failure` as the NOT_FOUND-vs-transport distinction test; a transport-failure test remains).
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -357,7 +357,7 @@ git commit -m "feat: stats service client with counter-reset-safe delta math"
 - Produces:
   - `jobs.TICK_SECONDS = 30`
   - `jobs.evaluate(users: list[dict], now: datetime) -> dict[str, str]` — pure; `{user_id: reason}` for **enabled** users only; `expires_at` past → `"expired"` (precedence); else `quota_gb` set and `used_bytes >= quota_gb * 1e9` → `"quota"`; disabled users excluded; `now == expires_at` → not expired (strict `<`).
-  - `jobs.run_cycle(settings, manager, stats_client, now=None) -> int` — one tick: (1) each enabled user: `get_bytes` → `compute_delta` → `update_user({used_bytes, last_raw_bytes})`; `StatsError` → skip stats this tick (log, non-fatal); (2) `evaluate(...)` → `update_user({enabled: 0, disable_reason: reason})` per hit; (3) if any disabled → `manager.apply_config(db.list_users())`; returns number disabled.
+  - `jobs.run_cycle(settings, manager, stats_client, now=None) -> int` — one tick: (1) each enabled user: `get_bytes(user_id)` → `compute_delta` → `update_user({used_bytes, last_raw_bytes})` (AMENDED 2026-10-14: NULL `last_raw_bytes` → default 0 before compute_delta; NOT_FOUND→0 handled inside `get_bytes`); `StatsError` → skip stats this tick (log, non-fatal); (2) `evaluate(...)` → `update_user({enabled: 0, disable_reason: reason})` per hit; (3) if any disabled → `manager.apply_config(db.list_users())`; returns number disabled.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -568,6 +568,7 @@ git commit -m "feat: self-service account page with isolated session namespace"
 - `test_dashboard_and_vpn_share_one_port` — same listener: `GET /` → 200/302 (panel) on the port where the 101 succeeded.
 - `test_real_config_passes_real_xray` — create user via API → `manager.config_path` → real `xray run -test -c` → rc 0.
 - `test_stats_grpc_roundtrip` — `StatsClient().get_inbound_bytes("vless")` returns `int >= 0` (gRPC name format + connection proven).
+- `test_user_traffic_counts_real_bytes` (AMENDED 2026-10-14 after the stat_name defect) — boot real xray with one enabled user, drive REAL traffic through a WS inbound (minimal python vless-ws client or a second xray instance as client), then `get_bytes(user_id)` returns `> 0` — empirically proves the per-user counter name literal.
 
 - [ ] **Step 2: Run test to verify it fails**
 
