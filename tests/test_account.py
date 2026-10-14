@@ -30,7 +30,7 @@ class FakeManager:
     def uptime_s(self):
         return 1.0 if self.running else None
 
-    def apply_config(self, users):
+    def apply_config(self, users, inbounds):
         return True, "ok"
 
 

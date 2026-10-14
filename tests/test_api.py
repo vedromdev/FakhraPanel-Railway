@@ -27,7 +27,7 @@ class FakeManager:
         self.running = True
         self.last_error = ""
 
-    def apply_config(self, users):
+    def apply_config(self, users, inbounds):
         self.applied.append([dict(user) for user in users])
         return self.ok, self.msg
 
