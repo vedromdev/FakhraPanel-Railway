@@ -15,6 +15,7 @@ from panel.ratelimit import RateLimiter
 from panel.routes_account import router as account_router
 from panel.routes_admin import health_router, router as admin_router
 from panel.routes_auth import router as auth_router
+from panel.routes_inbounds import router as inbounds_router
 from panel.routes_pages import router as pages_router
 from panel.xray.manager import XrayManager
 from panel.xray.stats import StatsClient
@@ -96,5 +97,6 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(account_router)
     app.include_router(pages_router)
     app.include_router(admin_router)
+    app.include_router(inbounds_router)
     app.include_router(health_router)
     return app

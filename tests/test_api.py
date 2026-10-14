@@ -5,14 +5,33 @@ to `manager.apply_config`; the fake manager below records those calls so the
 tests can pin the exact call count and the 500-with-saved rejection contract.
 """
 
+import json
+import os
 import re
+import shutil
+import socket
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from panel import auth, db
 from panel.app import create_app
+from panel.config import Settings
 from panel.constants import DEFAULT_SS_METHOD
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _real_xray() -> str | None:
+    for candidate in (
+        os.environ.get("XRAY_BIN"),
+        str(REPO_ROOT / ".bin" / "xray"),
+        shutil.which("xray"),
+    ):
+        if candidate and Path(candidate).is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    return None
 
 SAFE_CRED = re.compile(r"^[A-Za-z0-9_-]+$")  # URL-safe charset for credentials
 
@@ -24,12 +43,22 @@ class FakeManager:
         self.ok = ok
         self.msg = msg
         self.applied = []
+        self.inbound_changes = []
         self.running = True
         self.last_error = ""
 
     def apply_config(self, users, inbounds):
         self.applied.append([dict(user) for user in users])
         return self.ok, self.msg
+
+    def apply_inbound_change(self, users, inbounds, commit, revert):
+        # faithful stub of the five-gate order: commit happens, revert only
+        # exists for completeness (this stub never "fails after commit")
+        self.inbound_changes.append(
+            ([dict(u) for u in users], [dict(r) for r in inbounds])
+        )
+        commit()
+        return True, "ok"
 
     def is_running(self):
         return self.running
@@ -466,3 +495,286 @@ def test_bulk_create_assigns_default_inbound(auth_client):
     users = response.json()["users"]
     assert len(users) == 3
     assert all(u["inbound_id"] == "vless" for u in users)
+
+
+# --- Task 5: inbound CRUD API ------------------------------------------------
+
+def _reality_settings():
+    return {
+        "transport": "tcp",
+        "security": "reality",
+        "server_names": ["www.apple.com"],
+        "dest": "www.apple.com:443",
+    }
+
+
+def test_create_inbound_ok_with_hint(auth_client):
+    resp = auth_client.post(
+        "/api/inbounds",
+        json={"protocol": "vless", "port": 2048, "settings": _reality_settings()},
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    inbound = body["inbound"]
+    assert inbound["port"] == 2048
+    assert body["firewall_hint"] == "ufw allow 2048/tcp"
+    stored = db.get_inbound(inbound["id"])
+    assert stored is not None
+    parsed = json.loads(stored["settings"])
+    assert parsed["private_key"] and parsed["public_key"]  # keypair generated
+    assert len(parsed["short_ids"][0]) == 8
+    assert parsed["flow"] == "xtls-rprx-vision"
+
+
+def test_create_inbound_reserved_409(auth_client):
+    resp = auth_client.post(
+        "/api/inbounds", json={"protocol": "vless", "port": 80, "settings": {}}
+    )
+    assert resp.status_code == 409
+    assert "reserved" in resp.json()["detail"]
+
+
+def test_create_inbound_duplicate_port_409(auth_client):
+    resp = auth_client.post(
+        "/api/inbounds",
+        json={"protocol": "vmess", "port": 10002, "settings": {"transport": "ws"}},
+    )
+    assert resp.status_code == 409
+    assert "10002" in resp.json()["detail"]
+
+
+def test_create_inbound_occupied_port_409(auth_client):
+    holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    holder.bind(("127.0.0.1", 0))
+    holder.listen(1)
+    port = holder.getsockname()[1]
+    try:
+        resp = auth_client.post(
+            "/api/inbounds",
+            json={"protocol": "vless", "port": port, "listen": "127.0.0.1",
+                  "settings": {}},
+        )
+    finally:
+        holder.close()
+    assert resp.status_code == 409
+    assert "in use" in resp.json()["detail"]
+    assert not [r for r in db.list_inbounds() if r["port"] == port]  # not persisted
+
+
+def test_create_inbound_invalid_settings_400(auth_client):
+    resp = auth_client.post(
+        "/api/inbounds",
+        json={"protocol": "vmess", "port": 2049,
+              "settings": {"security": "reality",
+                           "server_names": ["a.com"], "dest": "a.com:443"}},
+    )
+    assert resp.status_code == 400
+    assert "reality" in resp.json()["detail"]
+
+
+@pytest.mark.skipif(
+    _real_xray() is None,
+    reason="xray binary not found (run: bash scripts/fetch_xray.sh)",
+)
+def test_xray_reject_422_no_persist(tmp_path):
+    """Gate 1 proven against the REAL binary: -test fails -> 422, saved=false,
+    and the inbound never reaches the DB."""
+    real_settings = Settings(
+        ADMIN_USERNAME="admin",
+        ADMIN_PASSWORD="test-pass-123",
+        PUBLIC_HOST="localhost",
+        DATA_DIR=str(tmp_path),
+        COOKIE_SECURE=False,
+        XRAY_BIN=_real_xray(),
+        ENV="test",
+    )
+    with TestClient(create_app(real_settings)) as client:
+        login = client.post(
+            "/login",
+            data={"username": "admin", "password": "test-pass-123"},
+            follow_redirects=False,
+        )
+        assert login.status_code == 302
+        resp = client.post(
+            "/api/inbounds",
+            json={"protocol": "vless", "port": 2050,
+                  "settings": {"security": "tls",
+                               "cert_file": "/nonexistent/cert.pem",
+                               "key_file": "/nonexistent/key.pem"}},
+        )
+        assert resp.status_code == 422, resp.text
+        body = resp.json()
+        assert body["saved"] is False
+        assert body["detail"]
+        assert not [r for r in db.list_inbounds() if r["port"] == 2050]
+
+
+def test_delete_inbound_with_users_409(auth_client):
+    _create(auth_client)  # a user lands on the vless seed
+
+    resp = auth_client.delete("/api/inbounds/vless")
+
+    assert resp.status_code == 409
+    assert "users still assigned" in resp.json()["detail"]
+    assert db.get_inbound("vless") is not None
+
+
+def test_delete_inbound_ok(auth_client):
+    resp = auth_client.delete("/api/inbounds/ss")
+
+    assert resp.status_code == 200, resp.text
+    assert db.get_inbound("ss") is None
+    assert "ss" not in {r["id"] for r in db.list_inbounds()}
+
+
+def test_delete_unknown_inbound_404(auth_client):
+    resp = auth_client.delete("/api/inbounds/ghost")
+    assert resp.status_code == 404
+
+
+def test_update_unknown_inbound_404(auth_client):
+    resp = auth_client.put(
+        "/api/inbounds/ghost", json={"protocol": "vless", "port": 2051, "settings": {}}
+    )
+    assert resp.status_code == 404
+
+
+def test_update_inbound_changes_port_and_settings(auth_client):
+    resp = auth_client.put(
+        "/api/inbounds/ss",
+        json={"protocol": "ss", "port": 10004,
+              "settings": {"transport": "ws", "security": "none", "path": "/u"}},
+    )
+
+    assert resp.status_code == 200, resp.text
+    row = db.get_inbound("ss")
+    assert row["port"] == 10004
+    assert json.loads(row["settings"])["path"] == "/u"
+
+
+def test_list_includes_user_counts(auth_client):
+    _create(auth_client)
+
+    resp = auth_client.get("/api/inbounds")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["user_counts"]["vless"] == 1
+    ids = {r["id"] for r in body["inbounds"]}
+    assert {"vless", "vmess", "trojan", "ss"} <= ids
+
+
+_requires_container = pytest.mark.skipif(
+    not os.environ.get("IN_DOCKER"),
+    reason="needs the container (real xray binds the new inbound port)",
+)
+
+
+@_requires_container
+def test_fresh_reality_inbound_serves_traffic(settings):
+    """Spec §10 headline criterion: an inbound created through the API serves
+    real client traffic — real xray, REALITY, applied by the five-gate flow."""
+    import subprocess
+    import time
+    from panel.xray.config_builder import write_config
+
+    with TestClient(create_app(settings)) as client:  # REAL manager, no FakeManager
+        login = client.post(
+            "/login",
+            data={"username": settings.ADMIN_USERNAME,
+                  "password": settings.ADMIN_PASSWORD},
+            follow_redirects=False,
+        )
+        assert login.status_code == 302
+
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            new_port = probe.getsockname()[1]
+
+        resp = client.post(
+            "/api/inbounds",
+            json={"protocol": "vless", "port": new_port,
+                  "settings": _reality_settings()},
+        )
+        assert resp.status_code == 201, resp.text
+        inbound = resp.json()["inbound"]
+        seed = json.loads(inbound["settings"])
+
+        # a user explicitly ON the fresh inbound (auto-assign would pick the
+        # oldest vless inbound — the seed — and an empty clients list rejects)
+        user_uuid = _first_user_uuid(client, inbound["id"])
+
+        # echo target the tunneled connection must reach
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            echo_port = s.getsockname()[1]
+        echo = subprocess.Popen(
+            [os.environ.get("PYTHON") or "python3", "-c", f"""
+import socket
+srv = socket.socket()
+srv.bind(("127.0.0.1", {echo_port}))
+srv.listen(4)
+while True:
+    conn, _ = srv.accept()
+    with conn:
+        conn.sendall(b"HELLO-FROM-ECHO\\n")
+"""],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            client_port = s.getsockname()[1]
+        client_config = {
+            "log": {"loglevel": "error"},
+            "inbounds": [{"listen": "127.0.0.1", "port": client_port,
+                          "protocol": "dokodemo-door",
+                          "settings": {"address": "127.0.0.1", "port": echo_port}}],
+            "outbounds": [{
+                "protocol": "vless",
+                "settings": {"vnext": [{"address": "127.0.0.1", "port": new_port,
+                    "users": [{"id": user_uuid,
+                               "encryption": "none",
+                               "flow": seed["flow"]}]}]},
+                "streamSettings": {"network": "tcp", "security": "reality",
+                    "realitySettings": {
+                        "serverName": seed["server_names"][0],
+                        "fingerprint": seed.get("fp", "chrome"),
+                        "publicKey": seed["public_key"],
+                        "shortId": seed["short_ids"][0]}},
+            }],
+        }
+        cfg_path = settings.data_dir() / "fresh-reality-client.json"
+        write_config(cfg_path, client_config)
+        proc = subprocess.Popen(
+            [settings.XRAY_BIN, "run", "-c", str(cfg_path)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        try:
+            banner = b""
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline and not banner:
+                try:
+                    with socket.create_connection(
+                        ("127.0.0.1", client_port), timeout=2
+                    ) as sock:
+                        sock.settimeout(2)
+                        banner = sock.recv(64)
+                except OSError:
+                    time.sleep(0.5)
+            assert banner.startswith(b"HELLO-FROM-ECHO"), (
+                f"fresh reality inbound never served traffic (port {new_port})"
+            )
+        finally:
+            proc.kill()
+            proc.wait()
+            echo.kill()
+            echo.wait()
+
+
+def _first_user_uuid(client, inbound_id: str) -> str:
+    """A user created through the API, explicitly assigned to inbound_id."""
+    resp = _create(client, inbound_id=inbound_id)
+    assert resp.status_code == 201, resp.text
+    return resp.json()["user"]["uuid"]

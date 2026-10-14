@@ -210,6 +210,96 @@ def get_inbound(inbound_id: str) -> dict | None:
         conn.close()
 
 
+_INBOUND_COLUMNS = (
+    "id", "protocol", "listen", "port", "remark", "settings", "enabled",
+    "created_at",
+)
+# columns a PUT may change — id and created_at are immutable identity
+_INBOUND_MUTABLE = ("protocol", "listen", "port", "remark", "settings", "enabled")
+
+
+def create_inbound(data: dict) -> dict:
+    """Insert one inbound row (settings as JSON text); returns the row."""
+    unknown = set(data) - set(_INBOUND_COLUMNS)
+    if unknown:
+        raise ValueError(f"unknown inbound columns: {sorted(unknown)}")
+    missing = set(_INBOUND_COLUMNS) - set(data)
+    if missing:
+        raise ValueError(f"missing inbound columns: {sorted(missing)}")
+    conn = _connect()
+    try:
+        with conn:
+            columns = ", ".join(_INBOUND_COLUMNS)
+            placeholders = ", ".join(f":{c}" for c in _INBOUND_COLUMNS)
+            conn.execute(
+                f"INSERT INTO inbounds ({columns}) VALUES ({placeholders})", data
+            )
+        row = conn.execute(
+            "SELECT * FROM inbounds WHERE id = ?", (data["id"],)
+        ).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def update_inbound(inbound_id: str, fields: dict) -> dict | None:
+    """Partial update of mutable columns; None if no such inbound."""
+    unknown = set(fields) - set(_INBOUND_MUTABLE)
+    if unknown:
+        raise ValueError(f"unknown inbound columns: {sorted(unknown)}")
+    if not fields:
+        return get_inbound(inbound_id)
+    conn = _connect()
+    try:
+        with conn:
+            assignments = ", ".join(f"{c} = :{c}" for c in fields)
+            cursor = conn.execute(
+                f"UPDATE inbounds SET {assignments} WHERE id = :__id",
+                {**fields, "__id": inbound_id},
+            )
+        if cursor.rowcount == 0:
+            return None
+        return get_inbound(inbound_id)
+    finally:
+        conn.close()
+
+
+def delete_inbound(inbound_id: str) -> bool:
+    conn = _connect()
+    try:
+        with conn:
+            cursor = conn.execute("DELETE FROM inbounds WHERE id = ?", (inbound_id,))
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def count_users_per_inbound() -> dict[str, int]:
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT inbound_id, COUNT(*) AS n FROM users"
+            " WHERE inbound_id IS NOT NULL GROUP BY inbound_id"
+        ).fetchall()
+        return {row["inbound_id"]: row["n"] for row in rows}
+    finally:
+        conn.close()
+
+
+def default_inbound_id(protocol: str) -> str | None:
+    """Oldest enabled inbound of this protocol (user auto-assign target)."""
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT id FROM inbounds WHERE protocol = ? AND enabled = 1"
+            " ORDER BY created_at, id LIMIT 1",
+            (protocol,),
+        ).fetchone()
+        return row["id"] if row is not None else None
+    finally:
+        conn.close()
+
+
 def _check_columns(data: dict) -> None:
     unknown = set(data) - set(_USER_COLUMNS)
     if unknown:

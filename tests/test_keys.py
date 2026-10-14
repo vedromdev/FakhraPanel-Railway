@@ -24,6 +24,8 @@ def test_generate_keypair_shape_and_roundtrip():
     # the public key recomputes from the private key's raw bytes
     priv_hex = _b64d(priv).hex()
     assert keys.public_from_private_hex(priv_hex) == _b64d(pub).hex()
+    # b64-pair convenience (validation derives a missing public_key from it)
+    assert keys.public_from_private(priv) == pub
 
 
 def test_keypair_is_random():

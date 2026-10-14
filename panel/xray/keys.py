@@ -67,3 +67,8 @@ def generate_keypair() -> tuple[str, str]:
     private = secrets.token_bytes(32)
     public = bytes.fromhex(public_from_private_hex(private.hex()))
     return _encode(private), _encode(public)
+
+
+def public_from_private(private: str) -> str:
+    """Public REALITY string for a private REALITY string (b64url pair)."""
+    return _encode(bytes.fromhex(public_from_private_hex(_decode(private).hex())))
