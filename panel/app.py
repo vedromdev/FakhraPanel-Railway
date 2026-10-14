@@ -4,15 +4,18 @@ import asyncio
 import logging
 import secrets
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from panel import bootstrap, db, jobs
 from panel.config import Settings
 from panel.ratelimit import RateLimiter
 from panel.routes_admin import health_router, router as admin_router
 from panel.routes_auth import router as auth_router
+from panel.routes_pages import router as pages_router
 from panel.xray.manager import XrayManager
 from panel.xray.stats import StatsClient
 
@@ -79,7 +82,13 @@ def create_app(settings: Settings) -> FastAPI:
 
     app = FastAPI(lifespan=lifespan)
     app.add_exception_handler(401, handle_unauthenticated)
+    app.mount(
+        "/static",
+        StaticFiles(directory=Path(__file__).resolve().parent / "templates" / "static"),
+        name="static",
+    )
     app.include_router(auth_router)
+    app.include_router(pages_router)
     app.include_router(admin_router)
     app.include_router(health_router)
     return app

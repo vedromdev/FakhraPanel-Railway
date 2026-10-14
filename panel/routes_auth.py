@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import APIRouter, Form, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.templating import Jinja2Templates
 
 from panel import auth, db
@@ -69,9 +69,3 @@ async def logout(request: Request):
     response = RedirectResponse("/login", status_code=302)
     response.delete_cookie(auth.ADMIN_COOKIE, path="/")
     return response
-
-
-@router.get("/", dependencies=[Depends(auth.require_admin)])
-async def root():
-    # Placeholder until the dashboard route lands.
-    return JSONResponse({"detail": "Fakhra Panel"})

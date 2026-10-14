@@ -1,0 +1,528 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/style.css">
+{% endblock %}
+
+{% block content %}
+<div class="container">
+  <div class="header">
+    <h1>{{ title }}</h1>
+    <p id="health-status" class="card-small">Checking xray…</p>
+    <div class="user-info">
+      <a class="btn btn-sm btn-secondary" href="/logout">Log out</a>
+    </div>
+  </div>
+
+  {% if not xray_up %}
+  <div id="xray-banner" class="banner-error" role="alert">
+    Xray is not running: {{ xray_error or "unknown error" }}
+  </div>
+  {% endif %}
+
+  <form id="create-form" class="create-form">
+    <h2>Create user</h2>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="create-username">Username</label>
+        <input id="create-username" name="username" type="text" required>
+      </div>
+      <div class="form-group">
+        <label for="create-protocol">Protocol</label>
+        <select id="create-protocol" name="protocol">
+          <option value="vless">vless</option>
+          <option value="vmess">vmess</option>
+          <option value="trojan">trojan</option>
+          <option value="ss">ss</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="create-expiry">Expiry days</label>
+        <input id="create-expiry" name="expiry_days" type="number" min="1" max="3650" placeholder="never">
+      </div>
+      <div class="form-group">
+        <label for="create-quota">Quota (GB)</label>
+        <input id="create-quota" name="quota_gb" type="number" min="0.001" step="any" placeholder="unlimited">
+      </div>
+    </div>
+    <div class="form-group">
+      <label for="create-note">Note</label>
+      <input id="create-note" name="note" type="text">
+    </div>
+    <div class="form-group">
+      <label for="create-password">Password (optional)</label>
+      <input id="create-password" name="password" type="text" placeholder="auto-generated" autocomplete="off">
+    </div>
+    <button type="submit" class="btn btn-full" id="create-submit">Create</button>
+    <div id="create-result" class="alert alert-success" hidden></div>
+  </form>
+
+  <form id="bulk-form" class="create-form">
+    <h2>Bulk create</h2>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="bulk-prefix">Username prefix</label>
+        <input id="bulk-prefix" name="prefix" type="text" required>
+      </div>
+      <div class="form-group">
+        <label for="bulk-count">Count</label>
+        <input id="bulk-count" name="count" type="number" min="1" max="100" value="5" required>
+      </div>
+      <div class="form-group">
+        <label for="bulk-protocol">Protocol</label>
+        <select id="bulk-protocol" name="protocol">
+          <option value="vless">vless</option>
+          <option value="vmess">vmess</option>
+          <option value="trojan">trojan</option>
+          <option value="ss">ss</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="bulk-expiry">Expiry days</label>
+        <input id="bulk-expiry" name="expiry_days" type="number" min="1" max="3650" placeholder="never">
+      </div>
+      <div class="form-group">
+        <label for="bulk-quota">Quota (GB)</label>
+        <input id="bulk-quota" name="quota_gb" type="number" min="0.001" step="any" placeholder="unlimited">
+      </div>
+    </div>
+    <div class="form-group">
+      <label for="bulk-note">Note</label>
+      <input id="bulk-note" name="note" type="text">
+    </div>
+    <button type="submit" class="btn btn-full" id="bulk-submit">Create users</button>
+    <div id="bulk-result" class="alert alert-success" hidden></div>
+  </form>
+
+  <p id="form-error" class="alert alert-error" role="alert" hidden></p>
+
+  <section class="instances-list">
+    <h2>Users</h2>
+    <div class="instances-grid" id="users-list">
+      {% for user in users %}
+      <div class="instance-card" data-user-id="{{ user.id }}" data-enabled="{{ 1 if user.enabled else 0 }}">
+        <div class="card-header {{ 'active' if user.enabled else 'inactive' }}">
+          <span class="status-dot"></span>
+          <strong>{{ user.username }}</strong>
+          <span class="card-small">{{ user.protocol }}</span>
+        </div>
+        <div class="card-body">
+          {% if user.quota_gb %}
+          {% set used_pct = ([100, (user.used_bytes or 0) / (user.quota_gb * 1e9) * 100] | min) | round %}
+          <div class="usage-bar"><div class="usage-fill" style="width: {{ used_pct }}%"></div></div>
+          <p class="card-small">{{ '%.2f' | format((user.used_bytes or 0) / 1e9) }} GB / {{ user.quota_gb }} GB</p>
+          {% else %}
+          <p class="card-small">{{ '%.2f' | format((user.used_bytes or 0) / 1e9) }} GB used</p>
+          {% endif %}
+          <p class="card-small">Expires: {{ user.expires_at[:10] if user.expires_at else 'never' }}</p>
+          {% if user.note %}<p class="card-small">{{ user.note }}</p>{% endif %}
+        </div>
+        <div class="card-actions">
+          <button type="button" class="btn btn-sm" data-action="view">View</button>
+          <button type="button" class="btn btn-sm btn-warning" data-action="toggle">{{ 'Disable' if user.enabled else 'Enable' }}</button>
+          <button type="button" class="btn btn-sm btn-secondary" data-action="regenerate">Regenerate</button>
+          <button type="button" class="btn btn-sm btn-danger" data-action="delete">Delete</button>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    <p class="card-small" id="empty-hint" {% if users %}hidden{% endif %}>No users yet.</p>
+  </section>
+</div>
+
+{% include "user_modal.html" %}
+
+<script>
+(function () {
+  "use strict";
+
+  var usersList = document.getElementById("users-list");
+  var formError = document.getElementById("form-error");
+  var createForm = document.getElementById("create-form");
+  var bulkForm = document.getElementById("bulk-form");
+  var modal = document.getElementById("user-modal");
+  var modalError = document.getElementById("modal-error");
+  var currentUserId = null;
+
+  function showError(element, message) {
+    element.textContent = message || "";
+    element.hidden = !message;
+  }
+
+  // Fetch wrapper: JSON in/out, abort-based timeout (bulk needs 120s — up to
+  // 100 bcrypt hashes run server-side).
+  function api(path, options, timeoutMs) {
+    var controller = new AbortController();
+    var timer = setTimeout(function () { controller.abort(); }, timeoutMs || 15000);
+    var opts = { signal: controller.signal };
+    if (options) {
+      Object.keys(options).forEach(function (key) { opts[key] = options[key]; });
+    }
+    if (opts.body) {
+      opts.headers = { "Content-Type": "application/json" };
+      opts.body = JSON.stringify(opts.body);
+    }
+    return fetch(path, opts).then(function (response) {
+      return response.json().catch(function () { return {}; }).then(function (body) {
+        clearTimeout(timer);
+        if (!response.ok) {
+          var detail = body.detail;
+          if (Array.isArray(detail)) {
+            detail = detail.map(function (item) { return item.msg || JSON.stringify(item); }).join("; ");
+          }
+          var error = new Error(detail || ("Request failed (" + response.status + ")"));
+          error.saved = body.saved;
+          throw error;
+        }
+        return body;
+      });
+    }, function (failure) {
+      clearTimeout(timer);
+      if (failure.name === "AbortError") {
+        throw new Error("Request timed out — try again");
+      }
+      throw failure;
+    });
+  }
+
+  function serializeForm(form) {
+    var payload = {};
+    Array.prototype.forEach.call(form.elements, function (field) {
+      if (!field.name) return;
+      var value = field.value.trim();
+      if (field.name === "expiry_days" || field.name === "count") {
+        payload[field.name] = value === "" ? null : parseInt(value, 10);
+      } else if (field.name === "quota_gb") {
+        payload[field.name] = value === "" ? null : parseFloat(value);
+      } else if (field.name === "password") {
+        if (value !== "") payload[field.name] = value;
+      } else {
+        payload[field.name] = value;
+      }
+    });
+    return payload;
+  }
+
+  function fmtBytes(bytes) {
+    return ((bytes || 0) / 1e9).toFixed(2);
+  }
+
+  function buildRow(user) {
+    var card = document.createElement("div");
+    card.className = "instance-card";
+    card.setAttribute("data-user-id", user.id);
+    card.setAttribute("data-enabled", user.enabled ? "1" : "0");
+
+    var header = document.createElement("div");
+    header.className = "card-header " + (user.enabled ? "active" : "inactive");
+    var dot = document.createElement("span");
+    dot.className = "status-dot";
+    var name = document.createElement("strong");
+    name.textContent = user.username;
+    var proto = document.createElement("span");
+    proto.className = "card-small";
+    proto.textContent = user.protocol;
+    header.appendChild(dot);
+    header.appendChild(name);
+    header.appendChild(proto);
+
+    var body = document.createElement("div");
+    body.className = "card-body";
+    if (user.quota_gb) {
+      var pct = Math.min(100, ((user.used_bytes || 0) / (user.quota_gb * 1e9)) * 100);
+      var bar = document.createElement("div");
+      bar.className = "usage-bar";
+      var fill = document.createElement("div");
+      fill.className = "usage-fill";
+      fill.style.width = pct.toFixed(1) + "%";
+      bar.appendChild(fill);
+      body.appendChild(bar);
+      var usage = document.createElement("p");
+      usage.className = "card-small";
+      usage.textContent = fmtBytes(user.used_bytes) + " GB / " + user.quota_gb + " GB";
+      body.appendChild(usage);
+    } else {
+      var used = document.createElement("p");
+      used.className = "card-small";
+      used.textContent = fmtBytes(user.used_bytes) + " GB used";
+      body.appendChild(used);
+    }
+    var expires = document.createElement("p");
+    expires.className = "card-small";
+    expires.textContent = "Expires: " + (user.expires_at ? user.expires_at.slice(0, 10) : "never");
+    body.appendChild(expires);
+    if (user.note) {
+      var note = document.createElement("p");
+      note.className = "card-small";
+      note.textContent = user.note;
+      body.appendChild(note);
+    }
+
+    var actions = document.createElement("div");
+    actions.className = "card-actions";
+    [["view", "View", "btn"], ["toggle", user.enabled ? "Disable" : "Enable", "btn btn-warning"],
+     ["regenerate", "Regenerate", "btn btn-secondary"], ["delete", "Delete", "btn btn-danger"]]
+      .forEach(function (spec) {
+        var button = document.createElement("button");
+        button.type = "button";
+        button.className = spec[2] + " btn-sm";
+        button.setAttribute("data-action", spec[0]);
+        button.textContent = spec[1];
+        actions.appendChild(button);
+      });
+
+    card.appendChild(header);
+    card.appendChild(body);
+    card.appendChild(actions);
+    return card;
+  }
+
+  // Never render the bcrypt hash: project only safe fields out of API rows.
+  function projectUser(user) {
+    return {
+      id: user.id,
+      username: user.username,
+      protocol: user.protocol,
+      enabled: user.enabled,
+      expires_at: user.expires_at,
+      quota_gb: user.quota_gb,
+      used_bytes: user.used_bytes,
+      note: user.note
+    };
+  }
+
+  function renderUsers(users) {
+    usersList.textContent = "";
+    users.forEach(function (user) { usersList.appendChild(buildRow(projectUser(user))); });
+    document.getElementById("empty-hint").hidden = users.length > 0;
+  }
+
+  function refreshUsers() {
+    return api("/api/users").then(function (data) {
+      renderUsers(data.users || []);
+    }).catch(function (error) {
+      showError(formError, error.message);
+    });
+  }
+
+  function openModal(user, link, qr, notice) {
+    currentUserId = user.id;
+    document.getElementById("modal-username").textContent = user.username;
+    document.getElementById("link-uri").value = link || "";
+    document.getElementById("qr-img").src = qr || "";
+    document.getElementById("edit-quota").value =
+      user.quota_gb == null ? "" : user.quota_gb;
+    document.getElementById("edit-expires").value =
+      user.expires_at ? user.expires_at.slice(0, 16) : "";
+    document.getElementById("edit-note").value = user.note || "";
+    var noticeEl = document.getElementById("modal-notice");
+    noticeEl.textContent = notice || "";
+    noticeEl.hidden = !notice;
+    showError(modalError, "");
+    modal.hidden = false;
+  }
+
+  function closeModal() {
+    modal.hidden = true;
+    currentUserId = null;
+  }
+
+  function withBusy(button, label, work) {
+    var original = button.textContent;
+    button.disabled = true;
+    button.textContent = label;
+    return work().then(function (result) {
+      button.disabled = false;
+      button.textContent = original;
+      return result;
+    }, function (error) {
+      button.disabled = false;
+      button.textContent = original;
+      throw error;
+    });
+  }
+
+  // --- create ----------------------------------------------------------------
+
+  createForm.addEventListener("submit", function (event) {
+    event.preventDefault();
+    showError(formError, "");
+    document.getElementById("create-result").hidden = true;
+    var submit = document.getElementById("create-submit");
+    withBusy(submit, "Creating…", function () {
+      return api("/api/users", { method: "POST", body: serializeForm(createForm) });
+    }).then(function (result) {
+      createForm.reset();
+      var box = document.getElementById("create-result");
+      box.textContent = "Created " + result.user.username +
+        " — password: " + result.password + " (shown once)";
+      box.hidden = false;
+      return refreshUsers();
+    }).catch(function (error) {
+      showError(formError, error.message + (error.saved ? " (change was saved)" : ""));
+    });
+  });
+
+  // --- bulk ------------------------------------------------------------------
+
+  bulkForm.addEventListener("submit", function (event) {
+    event.preventDefault();
+    showError(formError, "");
+    document.getElementById("bulk-result").hidden = true;
+    var submit = document.getElementById("bulk-submit");
+    // 100 bcrypt hashes take ~8s+; allow up to 120s before aborting.
+    withBusy(submit, "Creating…", function () {
+      return api("/api/users/bulk", { method: "POST", body: serializeForm(bulkForm) }, 120000);
+    }).then(function (result) {
+      bulkForm.reset();
+      var links = result.links || [];
+      var box = document.getElementById("bulk-result");
+      box.textContent = "Created " + links.length + " users. " +
+        "Passwords are not returned for bulk creates — use View → reset password " +
+        "on each user to get sign-in credentials. Links:\n" + links.join("\n");
+      box.hidden = false;
+      return refreshUsers();
+    }).catch(function (error) {
+      if (error.message && error.message.indexOf("already exists") !== -1) {
+        showError(formError, error.message);
+      } else {
+        showError(formError, error.message + (error.saved ? " (change was saved)" : ""));
+      }
+    });
+  });
+
+  // --- row actions -----------------------------------------------------------
+
+  usersList.addEventListener("click", function (event) {
+    var button = event.target.closest("button[data-action]");
+    if (!button) return;
+    var card = button.closest("[data-user-id]");
+    if (!card) return;
+    var id = card.getAttribute("data-user-id");
+    var action = button.getAttribute("data-action");
+    var username = card.querySelector("strong").textContent;
+
+    if (action === "view") {
+      showError(formError, "");
+      api("/api/users/" + encodeURIComponent(id)).then(function (data) {
+        openModal(projectUser(data.user), data.link, data.qr, "");
+      }).catch(function (error) {
+        showError(formError, error.message);
+      });
+    } else if (action === "toggle") {
+      var enable = card.getAttribute("data-enabled") !== "1";
+      api("/api/users/" + encodeURIComponent(id) + "/toggle", {
+        method: "POST", body: { enabled: enable }
+      }).then(function () {
+        return refreshUsers();
+      }).catch(function (error) {
+        showError(formError, error.message);
+      });
+    } else if (action === "regenerate") {
+      if (!window.confirm("Regenerate credentials for " + username +
+          "? The old link stops working immediately.")) return;
+      api("/api/users/" + encodeURIComponent(id) + "/regenerate", {
+        method: "POST", body: {}
+      }).then(function (data) {
+        return refreshUsers().then(function () {
+          openModal(projectUser(data.user), data.link, data.qr,
+            "Credentials regenerated — the old link no longer works.");
+        });
+      }).catch(function (error) {
+        showError(formError, error.message);
+      });
+    } else if (action === "delete") {
+      if (!window.confirm("Delete " + username + "? This cannot be undone.")) return;
+      api("/api/users/" + encodeURIComponent(id), { method: "DELETE" })
+        .then(function () {
+          return refreshUsers();
+        }).catch(function (error) {
+          showError(formError, error.message);
+        });
+    }
+  });
+
+  // --- modal -----------------------------------------------------------------
+
+  document.getElementById("modal-close").addEventListener("click", closeModal);
+  modal.addEventListener("click", function (event) {
+    if (event.target === modal) closeModal();
+  });
+
+  document.getElementById("copy-link").addEventListener("click", function () {
+    var input = document.getElementById("link-uri");
+    input.select();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(input.value);
+    } else {
+      document.execCommand("copy");
+    }
+  });
+
+  document.getElementById("reset-password").addEventListener("click", function () {
+    if (!currentUserId) return;
+    var button = this;
+    withBusy(button, "Resetting…", function () {
+      return api("/api/users/" + encodeURIComponent(currentUserId) + "/reset-password", {
+        method: "POST", body: {}
+      });
+    }).then(function (data) {
+      var notice = document.getElementById("modal-notice");
+      notice.textContent = "New password: " + data.password + " (shown once)";
+      notice.hidden = false;
+    }).catch(function (error) {
+      showError(modalError, error.message + (error.saved ? " (change was saved)" : ""));
+    });
+  });
+
+  document.getElementById("edit-form").addEventListener("submit", function (event) {
+    event.preventDefault();
+    if (!currentUserId) return;
+    var expiresRaw = document.getElementById("edit-expires").value;
+    var quotaRaw = document.getElementById("edit-quota").value.trim();
+    var payload = {
+      expires_at: expiresRaw ? new Date(expiresRaw).toISOString() : null,
+      quota_gb: quotaRaw === "" ? null : parseFloat(quotaRaw),
+      note: document.getElementById("edit-note").value
+    };
+    var button = document.getElementById("edit-save");
+    withBusy(button, "Saving…", function () {
+      return api("/api/users/" + encodeURIComponent(currentUserId), {
+        method: "PATCH", body: payload
+      });
+    }).then(function () {
+      closeModal();
+      return refreshUsers();
+    }).catch(function (error) {
+      showError(modalError, error.message + (error.saved ? " (change was saved)" : ""));
+    });
+  });
+
+  // --- health poll -----------------------------------------------------------
+
+  function setHealthStatus(running, uptime, lastError) {
+    var status = document.getElementById("health-status");
+    if (running) {
+      status.textContent = "Xray running" +
+        (uptime != null ? " (" + Math.round(uptime) + "s uptime)" : "");
+      status.className = "card-small";
+    } else {
+      status.textContent = "Xray down — " + (lastError || "unknown error");
+      status.className = "card-small banner-error-text";
+    }
+  }
+
+  function pollHealth() {
+    api("/api/health").then(function (health) {
+      var xray = health.xray || {};
+      setHealthStatus(Boolean(xray.running), xray.uptime_s, xray.last_error);
+    }).catch(function () { /* transient; keep last known state */ });
+  }
+
+  pollHealth();
+  setInterval(pollHealth, 30000);
+})();
+</script>
+{% endblock %}
