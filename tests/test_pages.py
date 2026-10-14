@@ -180,3 +180,17 @@ def test_inbounds_page_js_contract(settings):
         assert "TRANSPORTS_BY_PROTOCOL" in html
         assert "applyVisibility" in html
         assert "body.conflicts" in html  # api() fallback, dashboard parity
+
+
+# --- A3 Task 4: save paths ---------------------------------------------------
+
+
+def test_inbounds_js_save_paths_and_error_copy(settings):
+    with TestClient(create_app(settings)) as client:
+        client.app.state.manager = FakeManager()
+        _login(client, settings)
+        html = client.get("/inbounds").text
+        assert 'method: "POST"' in html
+        assert 'method: "PUT"' in html
+        assert "Nothing was saved" in html
+        assert "firewall_hint" in html

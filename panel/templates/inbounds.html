@@ -20,6 +20,8 @@
     <button type="button" class="btn" id="add-inbound">Add Inbound</button>
   </div>
 
+  <p id="save-notice" class="alert alert-success" hidden></p>
+
   <section class="instances-list">
     <div class="instances-grid" id="inbounds-list">
       {% for row in inbounds %}
@@ -372,6 +374,86 @@
     state = { mode: "create", row: null, settings: {} };
   }
 
+  function splitList(value) {
+    return value.split(",").map(function (part) { return part.trim(); })
+      .filter(function (part) { return part; });
+  }
+
+  // structured inputs -> state.settings (recognized keys only; unknown keys
+  // from prefill or the raw-JSON editor ride along untouched).
+  function syncFromForm() {
+    var s = state.settings;
+    s.transport = el.transport.value;
+    s.security = el.security.value;
+    if (el.transport.value === "ws") {
+      s.path = el.path.value.trim();
+      s.host = el.host.value.trim();
+    } else if (el.transport.value === "xhttp") {
+      s.path = el.xpath.value.trim();
+      s.mode = el.mode.value.trim();
+    }
+    if (el.transport.value === "grpc") {
+      s.serviceName = el.service.value.trim();
+    }
+    if (el.security.value === "tls") {
+      s.cert_file = el.cert.value.trim();
+      s.key_file = el.key.value.trim();
+    }
+    if (el.security.value === "reality") {
+      s.dest = el.dest.value.trim();
+      s.server_names = splitList(el.serverNames.value);
+      s.short_ids = splitList(el.shortIds.value);
+      s.fp = el.fp.value.trim() || "chrome";
+      s.flow = el.flow.value.trim() || "xtls-rprx-vision";
+    }
+    // empty values never reach the API — server defaults win
+    Object.keys(s).forEach(function (key) {
+      var value = s[key];
+      if (value === "" || (Array.isArray(value) && value.length === 0)) {
+        delete s[key];
+      }
+    });
+  }
+
+  function buildPayload() {
+    syncFromForm();
+    return {
+      protocol: el.protocol.value,
+      port: parseInt(el.port.value, 10),
+      listen: el.listen.value.trim() || "0.0.0.0",
+      remark: el.remark.value.trim(),
+      enabled: el.enabled.checked,
+      settings: state.settings
+    };
+  }
+
+  function submitInbound(event) {
+    event.preventDefault();
+    showError(formError, "");
+    var payload = buildPayload();
+    var request = state.mode === "edit"
+      ? api("/api/inbounds/" + encodeURIComponent(state.row.id),
+            { method: "PUT", body: payload })
+      : api("/api/inbounds", { method: "POST", body: payload });
+    return request.then(function (body) {
+      closeModal();
+      var text = "Inbound saved.";
+      if (body.firewall_hint) {
+        text += " This port isn't pre-opened — run: " + body.firewall_hint;
+      }
+      var pageNotice = document.getElementById("save-notice");
+      pageNotice.textContent = text;
+      pageNotice.hidden = false;
+      return refresh();
+    }).catch(function (error) {
+      // saved:false (422) is the OPPOSITE of the users-API 500 semantics:
+      // the five gates reverted everything, so say so plainly.
+      showError(formError, error.saved === false
+        ? "Nothing was saved — xray rejected the config: " + error.message
+        : error.message);
+    });
+  }
+
   function cardError(id, message) {
     var slot = inboundsList.querySelector('[data-error-for="' + id + '"]');
     if (slot) showError(slot, message);
@@ -406,9 +488,20 @@
       navigator.clipboard.writeText(el.publicKey.value);
     }
   });
-  el.protocol.addEventListener("change", applyVisibility);
-  el.transport.addEventListener("change", applyVisibility);
-  el.security.addEventListener("change", applyVisibility);
+  el.protocol.addEventListener("change", function () {
+    applyVisibility();
+    syncFromForm();
+  });
+  el.transport.addEventListener("change", function () {
+    applyVisibility();
+    syncFromForm();
+  });
+  el.security.addEventListener("change", function () {
+    applyVisibility();
+    syncFromForm();
+  });
+  form.addEventListener("input", syncFromForm);
+  form.addEventListener("submit", submitInbound);
 
   inboundsList.addEventListener("click", function (event) {
     var button = event.target.closest("[data-action]");
