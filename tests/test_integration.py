@@ -50,37 +50,33 @@ requires_container = pytest.mark.skipif(
 # --- unit-style: runs anywhere ---------------------------------------------
 
 
-def test_render_caddyfile_routes_and_tokens():
-    rendered = render_caddyfile(8080, "tok")
+def test_render_caddyfile_plain_serves_panel_only():
+    rendered = render_caddyfile(8080, auto_tls=False, public_host="localhost")
     assert "auto_https off" in rendered
     assert ":{$CADDY_PORT}" in rendered  # caddy binds this at runtime
-    for protocol in ("vless", "vmess", "trojan", "ss"):
-        assert f"/ray-{{$VPN_TOKEN}}/{protocol}*" in rendered
-        assert f"reverse_proxy 127.0.0.1:{PORTS[protocol]}" in rendered
-    # everything without a valid ray token falls through to the panel
+    # no VPN paths anywhere: xray owns its ports directly (A2 topology)
+    assert "/ray-" not in rendered
+    assert "VPN_TOKEN" not in rendered
+    # everything goes to the panel
     assert "handle {" in rendered
     assert "reverse_proxy 127.0.0.1:8000" in rendered
     # env placeholders are preserved ({$VAR} syntax), never bare-substituted
-    assert rendered.count("{$VPN_TOKEN}") == rendered.count("$VPN_TOKEN")
     assert rendered.count("{$CADDY_PORT}") == rendered.count("$CADDY_PORT")
 
 
-def test_render_caddyfile_auto_tls_serves_domain_with_https_on():
+def test_render_caddyfile_auto_tls_serves_panel_on_8080():
     rendered = render_caddyfile(
-        8080, "tok", auto_tls=True, public_host="vpn.example.com"
+        8080, auto_tls=True, public_host="vpn.example.com"
     )
-    # domain site address; Caddy's automatic HTTPS (LE via HTTP-01 on :80)
-    # must stay enabled, and the plain-port listener must disappear
-    assert "{$PUBLIC_HOST}" in rendered
+    # the panel's HTTPS site moves off :443 (xray owns it now); Caddy's
+    # automatic HTTPS (LE via HTTP-01 on :80) must stay enabled
+    assert "{$PUBLIC_HOST}:8080" in rendered
     assert "auto_https off" not in rendered
     assert ":{$CADDY_PORT}" not in rendered
-    # routing is identical to the plain mode
-    for protocol in ("vless", "vmess", "trojan", "ss"):
-        assert f"/ray-{{$VPN_TOKEN}}/{protocol}*" in rendered
-        assert f"reverse_proxy 127.0.0.1:{PORTS[protocol]}" in rendered
-    assert "handle {" in rendered
+    # panel-only, same as plain mode
+    assert "/ray-" not in rendered
+    assert "VPN_TOKEN" not in rendered
     assert "reverse_proxy 127.0.0.1:8000" in rendered
-    assert rendered.count("{$VPN_TOKEN}") == rendered.count("$VPN_TOKEN")
 
 
 def test_render_caddyfile_auto_tls_requires_a_bare_hostname():
@@ -95,7 +91,7 @@ def test_render_caddyfile_auto_tls_requires_a_bare_hostname():
         "vpn.example.com{}",
     ):
         with pytest.raises(ValueError, match="PUBLIC_HOST"):
-            render_caddyfile(8080, "tok", auto_tls=True, public_host=bad)
+            render_caddyfile(8080, auto_tls=True, public_host=bad)
 
 
 # --- helpers ---------------------------------------------------------------
@@ -124,7 +120,6 @@ class Stack:
 
     data_dir: Path
     caddy_port: int
-    token: str
     xray_bin: str
 
 
@@ -153,7 +148,6 @@ def stack(tmp_path_factory):
 
     settings = Settings(**bootstrap_settings_kwargs)
     bootstrap.ensure_runtime(settings)
-    token = db.get_or_create_meta("install_token", lambda: uuid.uuid4().hex)
 
     panel_log = open(data_dir / "panel.out", "w")
     panel = subprocess.Popen(
@@ -186,7 +180,7 @@ def stack(tmp_path_factory):
         ["caddy", "run", "--config", str(data_dir / "Caddyfile"),
          "--adapter", "caddyfile"],
         cwd=REPO_ROOT,
-        env={**os.environ, "CADDY_PORT": str(caddy_port), "VPN_TOKEN": token},
+        env={**os.environ, "CADDY_PORT": str(caddy_port)},
         stdout=caddy_log,
         stderr=subprocess.STDOUT,
     )
@@ -203,7 +197,6 @@ def stack(tmp_path_factory):
     yield Stack(
         data_dir=data_dir,
         caddy_port=caddy_port,
-        token=token,
         xray_bin=settings.XRAY_BIN,
     )
 

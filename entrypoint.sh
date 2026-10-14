@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Single-container entrypoint: bootstrap (install token + Caddyfile) ->
-# panel (spawns xray) -> caddy (front-multiplexes the one public port).
+# Single-container entrypoint: bootstrap (DB + Caddyfile) -> caddy (the
+# panel's public listener) -> panel (spawns xray, which owns the VPN
+# ports directly — caddy never proxies them).
 #
 # As PID 1 it must reap children and forward SIGTERM/SIGINT so a Railway
 # stop kills caddy and the panel (whose lifespan shutdown stops xray).
@@ -10,12 +11,9 @@ set -euo pipefail
 
 # The public port is caddy's: Railway injects PORT (8080 by default).
 export CADDY_PORT="${CADDY_PORT:-${PORT:-8080}}"
-# AUTO_TLS mode: caddy owns :80 (LE HTTP-01 + redirect) and the
-# {$PUBLIC_HOST} site on :443 — the readiness probe targets 443, and the
-# rendered Caddyfile no longer references CADDY_PORT at all.
-if [ "${AUTO_TLS:-}" = "true" ]; then
-  export CADDY_PORT=443
-fi
+# Real xray for the panel's manager (A1 installs it there; the image
+# ships it there too).
+export XRAY_BIN="${XRAY_BIN:-/usr/local/bin/xray}"
 # The panel stays on the loopback backend port the Caddyfile hardcodes.
 export PORT="${PANEL_PORT:-8000}"
 
@@ -30,10 +28,30 @@ if [ -z "${DATA_DIR:-}" ]; then
 fi
 export DATA_DIR
 
-# ensure_runtime creates the DB and $DATA_DIR/Caddyfile, guarantees the
-# install token, and prints it (its only stdout line).
-VPN_TOKEN="$(python3 -m panel.bootstrap)"
-export VPN_TOKEN
+# AUTO_TLS mode: caddy owns :80 (LE HTTP-01 + redirect) and the
+# {$PUBLIC_HOST}:8080 panel site. It binds the PUBLIC_HOST address, not
+# loopback, so readiness must probe that host:port — and wait out Let's
+# Encrypt issuance on first boot (install.sh allows 120s too).
+if [ "${AUTO_TLS:-}" = "true" ]; then
+  export CADDY_PORT=8080
+  probe_host="${PUBLIC_HOST:-}"
+  probe_timeout_s=120
+else
+  probe_host="127.0.0.1"
+  probe_timeout_s=10
+fi
+
+# ensure_runtime: seeds the DB and writes the Caddyfile caddy is about to
+# read. A failure is logged but not fatal HERE — the panel re-runs it at
+# boot, and a stale Caddyfile from a previous deploy keeps caddy viable;
+# the readiness gates below decide whether the container lives.
+set +e
+python3 -m panel.bootstrap
+bootstrap_rc=$?
+set -e
+if [ "${bootstrap_rc}" -ne 0 ]; then
+  echo "entrypoint: bootstrap exited ${bootstrap_rc} (continuing; see errors above)" >&2
+fi
 
 stopping=0
 caddy_pid=""
@@ -52,43 +70,24 @@ shutdown() {
 # teardown itself, so readiness failures can still exit 1 (not 143).
 trap 'stopping=1; shutdown' TERM INT
 
-python3 -m panel.main &
-panel_pid=$!
+# Caddy FIRST: in AUTO_TLS mode its :80 must answer ACME HTTP-01 even
+# while the panel is still booting.
+caddy run --config "${DATA_DIR}/Caddyfile" --adapter caddyfile &
+caddy_pid=$!
 if [ "${stopping}" -eq 1 ]; then
+  shutdown # the trap fired before this pid existed: kill it now, no orphan
   exit 143 # SIGTERM landed between the trap and the spawn
 fi
 
-# Wait (max 10 s) for the Caddyfile and the panel port before caddy starts.
-ready=0
-for _ in $(seq 1 100); do
-  if [ -f "${DATA_DIR}/Caddyfile" ] &&
-    (exec 3<>"/dev/tcp/127.0.0.1/${PORT}") 2>/dev/null; then
-    ready=1
-    break
-  fi
-  sleep 0.1
-done
-if [ "${ready}" -ne 1 ]; then
-  shutdown
-  if [ "${stopping}" -eq 1 ]; then
-    exit 143 # SIGTERM during startup, not a readiness failure
-  fi
-  echo "entrypoint: panel not listening on ${PORT} within 10s" >&2
-  exit 1
-fi
-
-caddy run --config "${DATA_DIR}/Caddyfile" --adapter caddyfile &
-caddy_pid=$!
-
-# Wait (max 10 s) for caddy to accept on the public port; a caddy that
-# died at startup (port in use, bad config) fails fast instead of leaving
-# a panel-only container that looks healthy but is publicly dead.
+# Wait for caddy to accept on its public port; a caddy that died at
+# startup (port in use, bad config) fails fast instead of leaving a
+# panel-only container that looks healthy but is publicly dead.
 caddy_ready=0
-for _ in $(seq 1 100); do
+for _ in $(seq 1 $((probe_timeout_s * 10))); do
   if ! kill -0 "${caddy_pid}" 2>/dev/null; then
     break # dead already; handled by the failure branch below
   fi
-  if (exec 4<>"/dev/tcp/127.0.0.1/${CADDY_PORT}") 2>/dev/null; then
+  if (exec 4<>"/dev/tcp/${probe_host}/${CADDY_PORT}") 2>/dev/null; then
     caddy_ready=1
     break
   fi
@@ -99,7 +98,35 @@ if [ "${caddy_ready}" -ne 1 ]; then
   if [ "${stopping}" -eq 1 ]; then
     exit 143 # SIGTERM during startup, not a readiness failure
   fi
-  echo "entrypoint: caddy not listening on ${CADDY_PORT} within 10s" >&2
+  echo "entrypoint: caddy not listening on ${probe_host}:${CADDY_PORT} within ${probe_timeout_s}s" >&2
+  exit 1
+fi
+
+python3 -m panel.main &
+panel_pid=$!
+if [ "${stopping}" -eq 1 ]; then
+  shutdown # the trap fired before this pid existed: kill it now, no orphan
+  exit 143 # SIGTERM landed between the trap and the spawn
+fi
+
+# Wait (max 10 s) for the panel backend before declaring the container up.
+panel_ready=0
+for _ in $(seq 1 100); do
+  if ! kill -0 "${panel_pid}" 2>/dev/null; then
+    break # dead already; handled by the failure branch below
+  fi
+  if (exec 3<>"/dev/tcp/127.0.0.1/${PORT}") 2>/dev/null; then
+    panel_ready=1
+    break
+  fi
+  sleep 0.1
+done
+if [ "${panel_ready}" -ne 1 ]; then
+  shutdown
+  if [ "${stopping}" -eq 1 ]; then
+    exit 143 # SIGTERM during startup, not a readiness failure
+  fi
+  echo "entrypoint: panel not listening on ${PORT} within 10s" >&2
   exit 1
 fi
 

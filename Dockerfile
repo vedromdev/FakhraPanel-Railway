@@ -1,5 +1,5 @@
-# Fakhra Panel — one container, one port (8080). Caddy front-multiplexes:
-# /ray-<token>/<protocol> websockets to xray, everything else to the panel.
+# Fakhra Panel — one container: caddy serves the panel (HTTPS via LE in
+# VPS mode), xray owns the VPN ports directly (REALITY on :443, etc.).
 FROM python:3.12-slim
 
 RUN apt-get update \

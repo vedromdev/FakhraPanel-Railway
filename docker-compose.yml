@@ -6,19 +6,27 @@ services:
     env_file: .env
     volumes:
       - ./data:/data
-  # VPS deployment: Caddy terminates TLS on :80/:443 for PUBLIC_HOST
-  # (AUTO_TLS=true in .env). Profile-gated so `docker compose up` keeps
-  # starting only the local `panel` service; install.sh targets it by name.
+  # VPS deployment: host networking — Xray binds its VPN ports directly on
+  # the host (REALITY on :443 etc.), caddy serves the panel on
+  # {$PUBLIC_HOST}:8080 with LE auto-TLS (:80 = HTTP-01). Health probes
+  # the HTTPS site (caddy binds PUBLIC_HOST's address, not loopback).
+  # Profile-gated so `docker compose up` keeps starting only the local
+  # `panel` service; install.sh targets it by name.
   vps:
     profiles: ["vps"]
     build: .
-    ports:
-      - "80:80"
-      - "443:443"
+    network_mode: host
     env_file: .env
     volumes:
       - ./data:/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsSk --max-time 5 \"https://$$PUBLIC_HOST:8080/api/health\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # first boot waits out Let's Encrypt issuance (~60s worst case)
+      start_period: 90s
   test:
     build: .
     command: python3 -m pytest tests/ -v

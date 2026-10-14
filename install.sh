@@ -3,9 +3,11 @@
 #
 # Installs Docker if needed, writes .env (prompts, or pass ADMIN_USERNAME /
 # ADMIN_PASSWORD / PUBLIC_HOST as env vars for non-interactive use), opens
-# the firewall, enables BBR + TCP buffers, and starts the TLS stack:
+# the firewall (80/443/8080), enables BBR + TCP buffers, and starts the VPS
+# stack (host networking: xray owns the VPN ports, caddy serves the panel
+# on :8080 with auto-TLS):
 #   docker compose up -d --build vps
-# then polls https://<domain>/api/health until green.
+# then polls https://<domain>:8080/api/health until green.
 #
 # Idempotent: re-running keeps an existing .env and just re-syncs the stack.
 set -euo pipefail
@@ -67,9 +69,14 @@ else
 fi
 
 # --- 4. Firewall (ufw only; other firewalls must be opened by hand) ----------
+# 80 = LE HTTP-01, 443 = xray REALITY, 8080 = panel HTTPS. Every VPN inbound
+# you create later needs its own port opened too (the panel prints the ufw
+# line as a hint when a non-pre-opened port is used).
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
-  ufw allow 80/tcp >/dev/null && ufw allow 443/tcp >/dev/null
-  say "ufw: opened 80/tcp and 443/tcp"
+  ufw allow 80/tcp >/dev/null && ufw allow 443/tcp >/dev/null && ufw allow 8080/tcp >/dev/null
+  say "ufw: opened 80/tcp (LE), 443/tcp (REALITY), 8080/tcp (panel)"
+else
+  warn "ufw is not active — open 80/443/8080 (and every inbound port you create) in your firewall by hand"
 fi
 
 # --- 5. Kernel tuning: BBR + buffers (optional speed baseline) ---------------
@@ -93,11 +100,11 @@ fi
 say "building + starting the vps stack..."
 docker compose up -d --build vps
 
-# --- 7. Health poll (Let's Encrypt issuance can take ~30s) -------------------
-say "waiting for HTTPS health at https://${PUBLIC_HOST}/api/health ..."
+# --- 7. Health poll (Let's Encrypt issuance can take ~60s) -------------------
+say "waiting for HTTPS health at https://${PUBLIC_HOST}:8080/api/health ..."
 healthy=""
 for _ in $(seq 1 60); do
-  if curl -fsS --max-time 3 "https://${PUBLIC_HOST}/api/health" >/dev/null 2>&1; then
+  if curl -fsS --max-time 3 "https://${PUBLIC_HOST}:8080/api/health" >/dev/null 2>&1; then
     healthy=1
     break
   fi
@@ -105,11 +112,11 @@ for _ in $(seq 1 60); do
 done
 
 if [ -n "${healthy}" ]; then
-  say "panel is up: https://${PUBLIC_HOST}/"
-  say "health: $(curl -fsS --max-time 3 "https://${PUBLIC_HOST}/api/health" || true)"
-  say "VPN links use https://${PUBLIC_HOST}:443 — log in, create users, import their links."
+  say "panel is up: https://${PUBLIC_HOST}:8080/"
+  say "health: $(curl -fsS --max-time 3 "https://${PUBLIC_HOST}:8080/api/health" || true)"
+  say "log in, create users, and import their links (each link carries its own port)."
 else
   warn "not healthy yet. Check: docker compose logs vps --tail 50"
-  warn "usual causes: DNS A record not pointing here, or 80/443 blocked"
+  warn "usual causes: DNS A record not pointing here, or 80/8080 blocked"
   exit 1
 fi

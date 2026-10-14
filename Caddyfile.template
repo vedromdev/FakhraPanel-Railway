@@ -1,26 +1,12 @@
-# Fakhra Panel — Caddy front-multiplexes: websocket VPN paths
-# (/ray-<token>/<protocol>) to the local xray inbounds, everything else to
-# the FastAPI panel. Rendered by panel/caddy.py, which fills the two mode
-# placeholders below (CADDY_GLOBAL_OPTIONS, CADDY_SITE_ADDRESS) and
-# normalizes VPN_TOKEN to Caddy's env-placeholder syntax so caddy expands
-# it from the environment — the entrypoint exports CADDY_PORT, VPN_TOKEN
-# and, in auto-TLS mode, PUBLIC_HOST. The rendered file never carries
-# secrets or a fixed port. Backend loopback ports must match
-# panel/paths.py PORTS.
+# Fakhra Panel — Caddy fronts ONLY the panel: one handle, reverse-proxied
+# to the FastAPI backend on 127.0.0.1:8000. VPN traffic never touches
+# caddy: Xray owns its inbound ports directly (REALITY on :443, etc.).
+# Rendered by panel/caddy.py, which fills the two mode placeholders below
+# (CADDY_GLOBAL_OPTIONS, CADDY_SITE_ADDRESS) — the entrypoint exports
+# CADDY_PORT and, in auto-TLS mode, PUBLIC_HOST. The rendered file never
+# carries secrets or a fixed port.
 $CADDY_GLOBAL_OPTIONS
 $CADDY_SITE_ADDRESS {
-	handle /ray-$VPN_TOKEN/vless* {
-		reverse_proxy 127.0.0.1:10001
-	}
-	handle /ray-$VPN_TOKEN/vmess* {
-		reverse_proxy 127.0.0.1:10002
-	}
-	handle /ray-$VPN_TOKEN/trojan* {
-		reverse_proxy 127.0.0.1:10003
-	}
-	handle /ray-$VPN_TOKEN/ss* {
-		reverse_proxy 127.0.0.1:10004
-	}
 	handle {
 		reverse_proxy 127.0.0.1:8000
 	}
