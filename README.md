@@ -18,6 +18,29 @@ plan.
   real `xray run -test` before it replaces the live one — a bad change can
   never take the VPN down.
 
+## Screenshots
+
+Captured against a local instance with obviously fake demo users.
+
+**Sign in** — the admin login at `/`:
+
+![Fakhra Panel login page](docs/images/login.png)
+
+**Admin dashboard** — single/bulk create on top, every user below with a live
+usage bar, expiry, and per-user actions (demo-04 is suspended):
+
+![Admin dashboard with demo users](docs/images/dashboard.png)
+
+**Share link & QR** — *View* on any user opens the connection details, ready
+to copy or scan:
+
+![User modal with share link and QR code](docs/images/modal.png)
+
+**Self-service account page** — users sign in at `/account` and see only
+their own link, usage, and expiry:
+
+![Self-service account page](docs/images/account.png)
+
 ## Architecture (single service, single container)
 
 ```
@@ -103,11 +126,74 @@ python3 -m pytest tests/ -v
 docker compose build test && docker compose run --rm test
 ```
 
-## Deployment
+## Deploy on Railway in 5 steps
 
-See **[DEPLOY.md](DEPLOY.md)** for the Railway walkthrough (env vars, the
-`/data` volume, healthcheck, and the manual E2E checklist), and
-[`.env.example`](.env.example) for every environment variable you need to
-configure.
+A condensed follow-along for the free plan — one service, one container, one
+port. Like the rest of the Railway docs in this repo this is **a walkthrough,
+not a logged deployment**: the test suites and local-container checks are what
+has actually been run here. [DEPLOY.md](DEPLOY.md) has the full version,
+including the post-deploy E2E checklist.
+
+### 1. Create the service
+
+[railway.app](https://railway.app) → **New Project** → **Deploy from GitHub
+repo** → select
+[`vedromdev/FakhraPanel-Railway`](https://github.com/vedromdev/FakhraPanel-Railway).
+Railway detects the `Dockerfile` and builds the image — Xray, Caddy, and the
+panel are baked in, no build arguments needed.
+
+### 2. Set the environment variables
+
+Service → **Variables** → add:
+
+| Variable | Value |
+|---|---|
+| `ADMIN_USERNAME` | your admin login name |
+| `ADMIN_PASSWORD` | **required** — long random value: `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` (the panel fails fast at startup without it) |
+| `PUBLIC_HOST` | `<your-app>.railway.app` — you'll fill this in during step 4 |
+| `SECRET_KEY` | optional — session-signing key; leave blank to auto-generate and persist it in the DB |
+
+Leave everything else alone: Railway injects `PORT`, and the defaults
+(`DATA_DIR=/data`, `XRAY_BIN=xray`, `COOKIE_SECURE=true`) are correct for the
+HTTPS edge. A blank `PUBLIC_HOST` logs an ERROR at boot and share links/QR
+generation fails until it's set.
+
+### 3. Attach the volume
+
+Service → **Settings → Volumes → Add Volume**, mount path exactly:
+
+```
+/data
+```
+
+The free plan includes a 0.5 GB volume — plenty for the SQLite DB and Xray
+config. **Without it, every redeploy starts from an empty database.**
+
+### 4. Generate the public hostname
+
+Service → **Settings → Networking → Generate Domain** → copy the free
+`*.railway.app` hostname into `PUBLIC_HOST` (step 2) and restart the service.
+Share links always point at `<PUBLIC_HOST>:443` with `sni=<PUBLIC_HOST>` —
+Railway's edge terminates TLS there.
+
+### 5. Healthcheck, deploy, verify
+
+In the service **Settings** set healthcheck path `/api/health`, healthcheck
+timeout `30`, and restart policy **on failure** (the same three values sit in
+[`railway.toml`](railway.toml), but Railway is deprecating Config as Code —
+prefer the dashboard settings). Then trigger a deployment and check:
+
+```bash
+curl -s https://<your-app>.railway.app/api/health
+# {"status":"ok","xray":{"running":true,"last_error":"","uptime_s":…}}
+```
+
+Open `https://<your-app>.railway.app/` and log in with your
+`ADMIN_USERNAME` / `ADMIN_PASSWORD` — you should see the dashboard from the
+screenshots above.
+
+Full walkthrough, env-var reference, and the manual E2E checklist:
+**[DEPLOY.md](DEPLOY.md)** · every environment variable:
+[`.env.example`](.env.example).
 
 Repository: <https://github.com/vedromdev/FakhraPanel-Railway>

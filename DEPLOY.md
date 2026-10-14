@@ -153,10 +153,10 @@ step, set `PUBLIC_HOST` to an address your client device can actually reach —
 
 ## What was actually verified in this repo
 
-- `python3 -m pytest tests/ -v` → **124 passed, 5 skipped** (5 skips are the
+- `python3 -m pytest tests/ -v` → **128 passed, 5 skipped** (5 skips are the
   Docker-only integration tests).
 - `docker compose build test && docker compose run --rm test` →
-  **129 passed** (real Caddy + panel + real Xray: WS `101` upgrade on
+  **133 passed** (real Caddy + panel + real Xray: WS `101` upgrade on
   `/ray-<token>/<proto>`, one port serving both dashboard and VPN, real
   `xray run -test`, gRPC stats roundtrip with real traffic bytes).
 - Local container smoke checks (`docker compose up panel`):
