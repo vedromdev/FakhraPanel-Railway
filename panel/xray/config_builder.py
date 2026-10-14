@@ -1,13 +1,16 @@
-"""Build the full Xray config dict for all enabled users.
+"""Build the full Xray config dict from inbound rows and their users.
 
 Pure functions: plain arguments in, plain dicts out — no settings, env, or DB.
+Every enabled inbound row becomes one xray inbound; users are grouped by their
+`inbound_id`. Link-only settings keys (public_key, fp, server_name, ...) are
+never rendered — the server config gets exactly what xray's schema wants.
 """
 
 import json
 from pathlib import Path
 
 from panel.constants import DEFAULT_SS_METHOD
-from panel.paths import PORTS, vpn_path
+from panel.paths import PORTS
 
 LISTEN = "127.0.0.1"
 
@@ -19,65 +22,115 @@ _XRAY_PROTOCOL = {
     "ss": "shadowsocks",
 }
 
-# protocols that get a websocket inbound (PORTS minus the stats/api listener)
-_PROTOCOLS = ("vless", "vmess", "trojan", "ss")
 
-
-def _client(protocol: str, user: dict) -> dict:
+def _client(protocol: str, user: dict, settings: dict) -> dict:
     client: dict = {"level": 0, "email": user["id"]}
     if protocol in ("vless", "vmess"):
         client["id"] = user["uuid"]
+    if protocol == "vless" and settings.get("flow"):
+        # REALITY+vision: flow is a per-client vless setting (not stream)
+        client["flow"] = settings["flow"]
     elif protocol == "trojan":
         client["password"] = user["credential"]
-    else:  # ss
+    elif protocol == "ss":
         client["method"] = user["ss_method"] or DEFAULT_SS_METHOD
         client["password"] = user["credential"]
     return client
 
 
-def _inbound_settings(protocol: str, users: list[dict]) -> dict:
-    settings: dict = {"clients": [_client(protocol, u) for u in users]}
+def _inbound_settings(protocol: str, users: list[dict], settings: dict) -> dict:
+    result: dict = {"clients": [_client(protocol, u, settings) for u in users]}
     if protocol == "vless":
-        settings["decryption"] = "none"
+        result["decryption"] = "none"
     elif protocol == "ss":
-        settings["network"] = "tcp"
-    return settings
+        result["network"] = "tcp"
+    return result
 
 
-def _ws_inbound(protocol: str, users: list[dict], install_token: str,
-                public_host: str) -> dict:
+def _deep_merge(base: dict, extra: dict) -> dict:
+    merged = dict(base)
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _stream_settings(settings: dict, public_host: str) -> dict:
+    transport = settings.get("transport", "tcp")
+    security = settings.get("security", "none")
+    stream: dict = {"network": transport, "security": security}
+    if transport == "ws":
+        stream["wsSettings"] = {
+            "path": settings.get("path") or "/",
+            "headers": {"Host": settings.get("host") or public_host},
+        }
+    elif transport == "grpc":
+        stream["grpcSettings"] = {"serviceName": settings.get("serviceName", "")}
+    elif transport == "xhttp":
+        stream["xhttpSettings"] = {
+            "path": settings.get("path") or "/",
+            "mode": settings.get("mode", "auto"),
+        }
+    if security == "tls":
+        stream["tlsSettings"] = {
+            "serverName": settings.get("server_name") or public_host,
+            "certificates": [
+                {
+                    "certificateFile": settings["cert_file"],
+                    "privateKeyFile": settings["key_file"],
+                }
+            ],
+        }
+    elif security == "reality":
+        stream["realitySettings"] = {
+            "dest": settings["dest"],
+            "serverNames": settings["server_names"],
+            "privateKey": settings["private_key"],
+            "shortIds": settings.get("short_ids", [""]),
+            "spiderX": settings.get("spider_x", "/"),
+        }
+    extra = settings.get("stream_settings_extra")
+    if extra:
+        stream = _deep_merge(stream, extra)
+    return stream
+
+
+def _xray_inbound(row: dict, users: list[dict], public_host: str) -> dict:
+    settings = row["settings"]
+    if isinstance(settings, str):
+        settings = json.loads(settings) if settings else {}
+    protocol = row["protocol"]
     return {
-        "tag": f"in-{protocol}",
-        "listen": LISTEN,
-        "port": PORTS[protocol],
+        "tag": f"in-{row['id']}",
+        "listen": row.get("listen") or LISTEN,
+        "port": row["port"],
         "protocol": _XRAY_PROTOCOL[protocol],
-        "settings": _inbound_settings(protocol, users),
-        "streamSettings": {
-            "network": "ws",
-            "security": "none",
-            "wsSettings": {
-                "path": vpn_path(install_token, protocol),
-                "headers": {"Host": public_host},
-            },
-        },
+        "settings": _inbound_settings(protocol, users, settings),
+        "streamSettings": _stream_settings(settings, public_host),
         "sniffing": {"enabled": True, "destOverride": ["http", "tls"]},
     }
 
 
-def build_config(users: list[dict], install_token: str, public_host: str) -> dict:
-    """Full Xray config: one ws inbound per protocol with >=1 enabled user."""
-    enabled: dict[str, list[dict]] = {}
+def build_config(inbounds: list[dict], users: list[dict], public_host: str) -> dict:
+    """Full Xray config: one inbound per enabled row + the stats api listener.
+
+    Enabled inbounds render even with zero users (fresh-install boot; probed
+    against real xray — empty clients are accepted for all four protocols).
+    """
+    assigned: dict[str | None, list[dict]] = {}
     for user in users:
         if user.get("enabled", 1):
-            enabled.setdefault(user["protocol"], []).append(user)
+            assigned.setdefault(user.get("inbound_id"), []).append(user)
 
-    inbounds = [
-        _ws_inbound(protocol, enabled[protocol], install_token, public_host)
-        for protocol in _PROTOCOLS
-        if protocol in enabled
+    rendered = [
+        _xray_inbound(row, assigned.get(row["id"], []), public_host)
+        for row in inbounds
+        if row.get("enabled", 1)
     ]
     # StatsService api access: dokodemo-door redirecting to the api outbound
-    inbounds.append(
+    rendered.append(
         {
             "listen": LISTEN,
             "port": PORTS["stats"],
@@ -100,7 +153,7 @@ def build_config(users: list[dict], install_token: str, public_host: str) -> dic
             },
         },
         "api": {"tag": "api", "services": ["StatsService"]},
-        "inbounds": inbounds,
+        "inbounds": rendered,
         # Xray auto-builds the "api" outbound from api.tag; freedom is the
         # only explicit outbound (real xray rejects a literal api outbound).
         "outbounds": [{"protocol": "freedom"}],

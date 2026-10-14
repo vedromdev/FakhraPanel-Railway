@@ -152,7 +152,9 @@ def _link_and_qr(user: dict, public_host: str) -> tuple[str, str]:
 
 def _apply(request: Request) -> JSONResponse | None:
     """Re-apply the xray config; on rejection return the 500-with-saved body."""
-    ok, msg = request.app.state.manager.apply_config(db.list_users())
+    ok, msg = request.app.state.manager.apply_config(
+        db.list_users(), db.list_inbounds()
+    )
     if not ok:
         logger.error("apply_config failed after API mutation: %s", msg)
         return JSONResponse(

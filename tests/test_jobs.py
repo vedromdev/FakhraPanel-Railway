@@ -44,6 +44,7 @@ def settings(tmp_path, fake_xray):
 def live_db(settings):
     """Temp DB initialized for direct db-module use (no app lifespan)."""
     db.init_db(settings.data_dir() / "panel.db")
+    db.migrate()  # bootstrap wiring: seeds the default inbounds jobs re-applies
     return settings
 
 
@@ -58,6 +59,7 @@ def _user(user_id="alice", **overrides):
         "ss_method": None,
         "enabled": 1,
         "disable_reason": None,
+        "inbound_id": "vless",
         "expires_at": None,
         "quota_gb": None,
         "used_bytes": 0,
@@ -92,8 +94,9 @@ class FakeManager:
         self.msg = msg
         self.applied = []
 
-    def apply_config(self, users):
+    def apply_config(self, users, inbounds):
         self.applied.append([dict(user) for user in users])
+        self.applied_inbounds = [dict(row) for row in inbounds]
         return self.ok, self.msg
 
 
@@ -190,7 +193,9 @@ def test_run_cycle_disables_and_reapplies_config(live_db):
     # Config was reapplied exactly once, and the disabled uuid is not in it.
     assert len(manager.applied) == 1
     rendered = json.dumps(
-        config_builder.build_config(manager.applied[-1], "tok", "host")
+        config_builder.build_config(
+            manager.applied_inbounds, manager.applied[-1], "host"
+        )
     )
     assert "uuid-goner" not in rendered
     assert "uuid-keeper" in rendered

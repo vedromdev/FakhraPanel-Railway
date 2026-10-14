@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import secrets
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
@@ -51,15 +50,12 @@ def create_app(settings: Settings) -> FastAPI:
         app.state.rate = RateLimiter()
         manager = XrayManager(
             settings,
-            install_token=db.get_or_create_meta(
-                "install_token", lambda: secrets.token_hex(16)
-            ),
             public_host=settings.PUBLIC_HOST,
         )
         if manager.config_path.exists():
             manager.start()
-        else:  # first boot: build a config from the (possibly empty) user list
-            manager.apply_config(db.list_users())
+        else:  # first boot: build a config from the (possibly empty) tables
+            manager.apply_config(db.list_users(), db.list_inbounds())
         manager.start_monitor()
         app.state.manager = manager
 

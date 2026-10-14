@@ -28,9 +28,8 @@ BACKOFF_MAX_S = 30.0
 class XrayManager:
     """Owns the xray config files (config.json + candidate + backup) and process."""
 
-    def __init__(self, settings: Settings, install_token: str, public_host: str) -> None:
+    def __init__(self, settings: Settings, public_host: str) -> None:
         self.settings = settings
-        self.install_token = install_token
         self.public_host = public_host
         self.last_error = ""
         # tunables (tests monkeypatch backoff_base)
@@ -91,7 +90,7 @@ class XrayManager:
             return True, output
         return False, output or f"xray config test failed (exit {proc.returncode})"
 
-    def apply_config(self, users: list[dict]) -> tuple[bool, str]:
+    def apply_config(self, users: list[dict], inbounds: list[dict]) -> tuple[bool, str]:
         """Build → write candidate → test → atomic swap → restart.
 
         Serialized by the manager lock so concurrent callers can't share (and
@@ -106,14 +105,14 @@ class XrayManager:
                     # jobs worker arriving late must not respawn xray or
                     # touch config files after shutdown.
                     return False, "manager stopped"
-                return self._apply_config(users)
+                return self._apply_config(users, inbounds)
         except Exception as exc:  # contract: callers get (False, reason), not a raise
             self.last_error = f"apply_config failed: {exc}"
             return False, self.last_error
 
-    def _apply_config(self, users: list[dict]) -> tuple[bool, str]:
+    def _apply_config(self, users: list[dict], inbounds: list[dict]) -> tuple[bool, str]:
         cfg = config_builder.build_config(
-            users, self.install_token, self.public_host
+            inbounds, users, self.public_host
         )
         # Unique candidate per call, in the same dir as config.json so the
         # swap below stays a same-filesystem atomic os.replace.

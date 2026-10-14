@@ -29,7 +29,20 @@ def _user(username: str = "alice", uuid: str = UUID) -> dict:
         "ss_method": None,
         "enabled": 1,
         "created_at": "2026-01-01T00:00:00+00:00",
+        "inbound_id": "vless-test",
     }
+
+
+def _inbounds() -> list[dict]:
+    """One inbound row the test users point at (fake xray never binds it)."""
+    return [{
+        "id": "vless-test",
+        "protocol": "vless",
+        "listen": "127.0.0.1",
+        "port": 12345,
+        "settings": {"transport": "tcp", "security": "none"},
+        "enabled": 1,
+    }]
 
 
 @pytest.fixture
@@ -48,9 +61,7 @@ def settings(tmp_path, fake_xray):
 
 @pytest.fixture
 def manager(settings):
-    mgr = XrayManager(
-        settings, install_token="tok-abc", public_host=settings.PUBLIC_HOST
-    )
+    mgr = XrayManager(settings, public_host=settings.PUBLIC_HOST)
     yield mgr
     mgr.stop()
 
@@ -66,7 +77,7 @@ def _wait(predicate, timeout: float, interval: float = 0.1) -> bool:
 
 
 def test_apply_config_accepts_valid_candidate(manager):
-    ok, msg = manager.apply_config([_user()])
+    ok, msg = manager.apply_config([_user()], _inbounds())
     assert ok, msg
     assert UUID in manager.config_path.read_text(encoding="utf-8")
     assert manager.is_running()
@@ -75,7 +86,7 @@ def test_apply_config_accepts_valid_candidate(manager):
 
 def test_apply_config_rejects_invalid_candidate(manager, monkeypatch):
     # Apply a good config first, then try to sneak a broken one past the test.
-    ok, msg = manager.apply_config([_user()])
+    ok, msg = manager.apply_config([_user()], _inbounds())
     assert ok, msg
     before = manager.config_path.read_bytes()
     pid_before = manager.pid
@@ -83,10 +94,10 @@ def test_apply_config_rejects_invalid_candidate(manager, monkeypatch):
     monkeypatch.setattr(
         config_builder,
         "build_config",
-        lambda users, install_token, public_host: {"INVALID_CONFIG": True},
+        lambda inbounds, users, public_host: {"INVALID_CONFIG": True},
     )
 
-    ok, msg = manager.apply_config([_user()])
+    ok, msg = manager.apply_config([_user()], _inbounds())
     assert not ok
     assert msg
     assert manager.config_path.read_bytes() == before  # old file untouched
@@ -118,7 +129,7 @@ def test_apply_config_safe_under_concurrency(manager, monkeypatch):
     monkeypatch.setattr(manager, "test_config_file", synced_test)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [pool.submit(manager.apply_config, users) for _ in range(2)]
+        futures = [pool.submit(manager.apply_config, users, _inbounds()) for _ in range(2)]
         results = [f.result(timeout=15) for f in futures]
 
     assert all(ok for ok, _ in results), results
@@ -128,7 +139,7 @@ def test_apply_config_safe_under_concurrency(manager, monkeypatch):
 
 
 def test_apply_config_refused_after_stop(manager):
-    ok, msg = manager.apply_config([_user()])
+    ok, msg = manager.apply_config([_user()], _inbounds())
     assert ok, msg
     assert manager.pid is not None
 
@@ -136,7 +147,7 @@ def test_apply_config_refused_after_stop(manager):
     assert manager.pid is None
     config_before = manager.config_path.read_bytes()
 
-    ok, msg = manager.apply_config([_user(username="bob", uuid=UUID2)])
+    ok, msg = manager.apply_config([_user(username="bob", uuid=UUID2)], _inbounds())
 
     # A stopped manager must refuse, spawn nothing, and mutate nothing.
     assert (ok, msg) == (False, "manager stopped")
@@ -148,14 +159,16 @@ def test_apply_config_refused_after_stop(manager):
 def test_apply_config_refused_from_other_thread_after_stop(manager):
     # The detached to_thread worker scenario: stop() first, then apply from
     # another thread — the ordering guard must refuse the late apply.
-    ok, msg = manager.apply_config([_user()])
+    ok, msg = manager.apply_config([_user()], _inbounds())
     assert ok, msg
     manager.stop()
     config_before = manager.config_path.read_bytes()
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         result = pool.submit(
-            manager.apply_config, [_user(username="bob", uuid=UUID2)]
+            manager.apply_config,
+            [_user(username="bob", uuid=UUID2)],
+            _inbounds(),
         ).result(timeout=15)
 
     assert result == (False, "manager stopped")
@@ -165,10 +178,10 @@ def test_apply_config_refused_from_other_thread_after_stop(manager):
 
 
 def test_start_after_stop_rearms_apply_config(manager):
-    ok, _ = manager.apply_config([_user()])
+    ok, _ = manager.apply_config([_user()], _inbounds())
     assert ok
     manager.stop()
-    assert manager.apply_config([_user(username="bob", uuid=UUID2)]) == (
+    assert manager.apply_config([_user(username="bob", uuid=UUID2)], _inbounds()) == (
         False,
         "manager stopped",
     )
@@ -177,14 +190,14 @@ def test_start_after_stop_rearms_apply_config(manager):
     assert manager.start()
     assert manager.is_running()
 
-    ok, msg = manager.apply_config([_user(username="bob", uuid=UUID2)])
+    ok, msg = manager.apply_config([_user(username="bob", uuid=UUID2)], _inbounds())
     assert ok, msg
     assert UUID2 in manager.config_path.read_text(encoding="utf-8")
     assert manager.is_running()
 
 
 def test_restart_failure_restores_backup_and_keeps_serving(manager, monkeypatch):
-    ok, msg = manager.apply_config([_user()])
+    ok, msg = manager.apply_config([_user()], _inbounds())
     assert ok, msg
     old_pid = manager.pid
     assert old_pid is not None
@@ -194,14 +207,14 @@ def test_restart_failure_restores_backup_and_keeps_serving(manager, monkeypatch)
     # the rollback branch must restore the backup and re-serve the old config.
     real_build = config_builder.build_config
 
-    def build_dying(users, install_token, public_host):
-        cfg = real_build(users, install_token, public_host)
+    def build_dying(inbounds, users, public_host):
+        cfg = real_build(inbounds, users, public_host)
         cfg["DIE_ON_RUN"] = True
         return cfg
 
     monkeypatch.setattr(config_builder, "build_config", build_dying)
 
-    ok, msg = manager.apply_config([_user()])
+    ok, msg = manager.apply_config([_user()], _inbounds())
     assert not ok, f"expected restart failure, got (True, {msg!r})"
     assert msg
     assert manager.config_path.read_bytes() == pre_bytes  # backup restored
@@ -213,7 +226,7 @@ def test_restart_failure_restores_backup_and_keeps_serving(manager, monkeypatch)
 def test_start_spawns_process_and_stop_kills_it(manager):
     config_builder.write_config(
         manager.config_path,
-        config_builder.build_config([_user()], "tok-abc", manager.public_host),
+        config_builder.build_config(_inbounds(), [_user()], manager.public_host),
     )
     assert manager.start()
     pid = manager.pid
@@ -234,7 +247,7 @@ def test_monitor_restarts_dead_process(manager, monkeypatch):
     monkeypatch.setattr(manager, "backoff_base", 0.1)
     config_builder.write_config(
         manager.config_path,
-        config_builder.build_config([_user()], "tok-abc", manager.public_host),
+        config_builder.build_config(_inbounds(), [_user()], manager.public_host),
     )
     assert manager.start()
     manager.start_monitor()
