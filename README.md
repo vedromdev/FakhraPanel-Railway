@@ -23,6 +23,9 @@ one-command installer on your own VPS.
   security, the REALITY public key is shown read-only for client setup,
   a raw-JSON section exposes every setting, and ports outside the
   pre-opened set come with the exact `ufw` hint.
+- **Four themes** — Dark (default), Light, Ocean, Solarized: pick one from
+  the header switcher on any page; it's remembered per browser (no
+  account/setting needed).
 - **Subscription URL** — every user gets `/sub/<token>`: a rate-limited,
   `no-store`, base64 link list importable by any client that speaks
   subscriptions.

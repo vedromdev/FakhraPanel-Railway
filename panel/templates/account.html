@@ -2,9 +2,7 @@
 
 {% block title %}{{ title }}{% endblock %}
 
-{% block head %}
-<link rel="stylesheet" href="/static/style.css">
-{% endblock %}
+{% block body_class %}app{% endblock %}
 
 {% block content %}
 <div class="container">
@@ -12,6 +10,12 @@
     <h1>{{ title }}</h1>
     <p class="card-small">Signed in as <strong>{{ user.username }}</strong></p>
     <div class="user-info">
+      <select id="theme-picker" class="theme-picker" aria-label="Theme">
+        <option value="dark">Dark</option>
+        <option value="light">Light</option>
+        <option value="ocean">Ocean</option>
+        <option value="solarized">Solarized</option>
+      </select>
       <a class="btn btn-sm btn-secondary" href="/account/logout">Log out</a>
     </div>
   </div>

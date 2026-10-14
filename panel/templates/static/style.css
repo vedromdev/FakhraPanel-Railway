@@ -16,6 +16,85 @@
     --text: #e6edf3;
     --muted: #8b949e;
     --success: #3fb950;
+    --alert-error-bg: rgba(218, 54, 51, 0.15);
+    --alert-error-text: #ff8a8a;
+    --alert-success-bg: rgba(63, 185, 80, 0.15);
+    --alert-success-text: #7fdf9a;
+    --proto-vless: #58a6ff;
+    --proto-vmess: #3fb950;
+    --proto-trojan: #d29922;
+    --proto-ss: #bc8cff;
+}
+
+/* --- Themes ---------------------------------------------------------------
+   One variable set each; GitHub Dark (the default) is :root above, so
+   data-theme="dark" needs no block. The boot script in base.html reads
+   localStorage before paint; theme.js wires the header picker. */
+
+[data-theme="light"] {
+    --bg: #f6f8fa;
+    --card: #ffffff;
+    --border: #d0d7de;
+    --input: #ffffff;
+    --primary: #1f883d;
+    --primary-hover: #1a7f37;
+    --danger: #cf222e;
+    --warning: #9a6700;
+    --text: #1f2328;
+    --muted: #656d76;
+    --success: #1a7f37;
+    --alert-error-bg: #ffebe9;
+    --alert-error-text: #a40e26;
+    --alert-success-bg: #dafbe1;
+    --alert-success-text: #1a7f37;
+    --proto-vless: #0969da;
+    --proto-vmess: #1a7f37;
+    --proto-trojan: #9a6700;
+    --proto-ss: #8250df;
+}
+
+[data-theme="ocean"] {
+    --bg: #0f172a;
+    --card: #1e293b;
+    --border: #334155;
+    --input: #0f172a;
+    --primary: #0ea5e9;
+    --primary-hover: #38bdf8;
+    --danger: #f87171;
+    --warning: #fbbf24;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --success: #34d399;
+    --alert-error-bg: rgba(248, 113, 113, 0.15);
+    --alert-error-text: #fca5a5;
+    --alert-success-bg: rgba(52, 211, 153, 0.15);
+    --alert-success-text: #6ee7b7;
+    --proto-vless: #60a5fa;
+    --proto-vmess: #34d399;
+    --proto-trojan: #fbbf24;
+    --proto-ss: #c4b5fd;
+}
+
+[data-theme="solarized"] {
+    --bg: #002b36;
+    --card: #073642;
+    --border: #2a4d55;
+    --input: #002b36;
+    --primary: #2aa198;
+    --primary-hover: #35b3a9;
+    --danger: #dc322f;
+    --warning: #b58900;
+    --text: #93a1a1;
+    --muted: #657b83;
+    --success: #859900;
+    --alert-error-bg: rgba(220, 50, 47, 0.15);
+    --alert-error-text: #ff9a90;
+    --alert-success-bg: rgba(133, 153, 0, 0.15);
+    --alert-success-text: #b3c43d;
+    --proto-vless: #268bd2;
+    --proto-vmess: #859900;
+    --proto-trojan: #b58900;
+    --proto-ss: #6c71c4;
 }
 
 body {
@@ -351,31 +430,23 @@ body {
 }
 
 .alert-error {
-    background: rgba(218, 54, 51, 0.15);
-    color: #ff8a8a;
+    background: var(--alert-error-bg);
+    color: var(--alert-error-text);
     border: 1px solid var(--danger);
 }
 
 .alert-success {
-    background: rgba(63, 185, 80, 0.15);
-    color: #7fdf9a;
+    background: var(--alert-success-bg);
+    color: var(--alert-success-text);
     border: 1px solid var(--success);
 }
 
 /* --- Dashboard additions (Task 9) -------------------------------------- */
 
-/* The login-centered body from base.html doesn't fit a full-page layout;
-   this stylesheet is only linked from the dashboard, so an override here
-   never affects /login. */
-body {
-    display: block;
-    min-height: auto;
-}
-
 .banner-error {
-    background: rgba(218, 54, 51, 0.15);
+    background: var(--alert-error-bg);
     border: 1px solid var(--danger);
-    color: #ff8a8a;
+    color: var(--alert-error-text);
     border-radius: 6px;
     padding: 12px 16px;
     margin-bottom: 24px;
@@ -383,7 +454,7 @@ body {
 }
 
 .banner-error-text {
-    color: #ff8a8a;
+    color: var(--alert-error-text);
     font-weight: 600;
 }
 
@@ -425,10 +496,20 @@ body {
     line-height: 1.4;
 }
 
-.chip-vless { color: #58a6ff; border-color: #58a6ff44; }
-.chip-vmess { color: var(--success); border-color: #3fb95044; }
-.chip-trojan { color: #d29922; border-color: #d2992244; }
-.chip-ss { color: #bc8cff; border-color: #bc8cff44; }
+.chip-vless { color: var(--proto-vless); border-color: var(--proto-vless); }
+.chip-vmess { color: var(--proto-vmess); border-color: var(--proto-vmess); }
+.chip-trojan { color: var(--proto-trojan); border-color: var(--proto-trojan); }
+.chip-ss { color: var(--proto-ss); border-color: var(--proto-ss); }
+
+.theme-picker {
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--input);
+    color: var(--text);
+    font-size: 0.85rem;
+    cursor: pointer;
+}
 
 #inbound-json {
     width: 100%;

@@ -233,3 +233,43 @@ def test_inbounds_js_failure_paths_resync_list(settings):
         # the three failure-path catches minimum re-sync after showing errors
         assert html.count("refresh().catch(") >= 3
         assert "NEVER pruned" in html
+
+
+# --- A3.5: themes -----------------------------------------------------------
+
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def test_theme_boot_script_reaches_login(settings):
+    """The pre-paint boot script lives in base.html, so even the login pages
+    (no head block of their own) load the saved theme with no flash."""
+    with TestClient(create_app(settings)) as client:
+        html = client.get("/login").text
+        assert 'localStorage.getItem("fakhra-theme")' in html
+        assert 'href="/static/style.css"' in html
+
+
+def test_theme_picker_on_app_pages(settings):
+    with TestClient(create_app(settings)) as client:
+        client.app.state.manager = FakeManager()
+        _login(client, settings)
+        for path in ("/", "/inbounds"):
+            html = client.get(path).text
+            assert 'id="theme-picker"' in html
+            for theme in ("dark", "light", "ocean", "solarized"):
+                assert f'value="{theme}"' in html
+        # account page ships the picker too (template-level contract;
+        # serving it needs a user session, covered by test_account)
+        account = (_REPO_ROOT / "panel/templates/account.html").read_text()
+        assert 'id="theme-picker"' in account
+
+
+def test_theme_stylesheet_contract():
+    css = (_REPO_ROOT / "panel/templates/static/style.css").read_text()
+    for theme in ("light", "ocean", "solarized"):
+        assert f'[data-theme="{theme}"]' in css
+    # variable-ization: alerts and protocol chips route through theme vars
+    assert "var(--alert-error-text)" in css
+    assert "var(--proto-vless)" in css
