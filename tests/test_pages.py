@@ -163,3 +163,20 @@ def test_nav_links_between_dashboard_and_inbounds(settings):
         page = client.get("/inbounds")
         assert page.status_code == 200
         assert 'href="/"' in page.text
+
+
+# --- A3 Task 3: JS core ------------------------------------------------------
+
+
+def test_inbounds_page_js_contract(settings):
+    with TestClient(create_app(settings)) as client:
+        client.app.state.manager = FakeManager()
+        _login(client, settings)
+        response = client.get("/inbounds")
+        assert response.status_code == 200
+        html = response.text
+        assert "/api/inbounds" in html
+        assert "SECURITY_BY_PROTOCOL" in html
+        assert "TRANSPORTS_BY_PROTOCOL" in html
+        assert "applyVisibility" in html
+        assert "body.conflicts" in html  # api() fallback, dashboard parity

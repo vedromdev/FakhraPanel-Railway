@@ -50,4 +50,385 @@
 </div>
 
 {% include "inbound_modal.html" %}
+
+<script>
+(function () {
+  "use strict";
+
+  var inboundsList = document.getElementById("inbounds-list");
+  var emptyHint = document.getElementById("empty-hint");
+  var modal = document.getElementById("inbound-modal");
+  var modalTitle = document.getElementById("inbound-modal-title");
+  var form = document.getElementById("inbound-form");
+  var formError = document.getElementById("inbound-error");
+  var notice = document.getElementById("inbound-notice");
+
+  var el = {
+    protocol: document.getElementById("inbound-protocol"),
+    port: document.getElementById("inbound-port"),
+    listen: document.getElementById("inbound-listen"),
+    remark: document.getElementById("inbound-remark"),
+    enabled: document.getElementById("inbound-enabled"),
+    transport: document.getElementById("inbound-transport"),
+    path: document.getElementById("inbound-path"),
+    host: document.getElementById("inbound-host"),
+    service: document.getElementById("inbound-service"),
+    xpath: document.getElementById("inbound-xpath"),
+    mode: document.getElementById("inbound-mode"),
+    security: document.getElementById("inbound-security"),
+    cert: document.getElementById("inbound-cert"),
+    key: document.getElementById("inbound-key"),
+    dest: document.getElementById("inbound-dest"),
+    serverNames: document.getElementById("inbound-server-names"),
+    shortIds: document.getElementById("inbound-short-ids"),
+    fp: document.getElementById("inbound-fp"),
+    flow: document.getElementById("inbound-flow"),
+    publicKey: document.getElementById("inbound-public-key"),
+    json: document.getElementById("inbound-json"),
+    jsonError: document.getElementById("json-error")
+  };
+
+  var SECURITY_BY_PROTOCOL = {
+    vless: ["none", "tls", "reality"],
+    vmess: ["none", "tls"],
+    trojan: ["none", "tls"],
+    ss: ["none"]
+  };
+  var TRANSPORTS_BY_PROTOCOL = {
+    vless: ["tcp", "ws", "grpc", "xhttp"],
+    vmess: ["tcp", "ws", "grpc", "xhttp"],
+    trojan: ["tcp"],
+    ss: ["tcp"]
+  };
+  var TRANSPORT_KEYS = { ws: ["path", "host"], grpc: ["serviceName"], xhttp: ["path", "mode"] };
+  var TLS_KEYS = ["cert_file", "key_file"];
+  var REALITY_KEYS = ["dest", "server_names", "short_ids", "fp", "flow",
+                      "private_key", "public_key", "spiderX"];
+
+  // single source of truth for the settings object; reset fully on close so
+  // unknown keys from inbound A never leak into inbound B's payload.
+  var state = { mode: "create", row: null, settings: {} };
+  var rows = [];   // parsed inbound rows from the last refresh
+  var counts = {}; // inbound id -> assigned user count
+
+  function showError(element, message) {
+    element.textContent = message || "";
+    element.hidden = !message;
+  }
+
+  // Fetch wrapper: JSON in/out, abort-based timeout — same as dashboard.
+  function api(path, options, timeoutMs) {
+    var controller = new AbortController();
+    var timer = setTimeout(function () { controller.abort(); }, timeoutMs || 15000);
+    var opts = { signal: controller.signal };
+    if (options) {
+      Object.keys(options).forEach(function (key) { opts[key] = options[key]; });
+    }
+    if (opts.body) {
+      opts.headers = { "Content-Type": "application/json" };
+      opts.body = JSON.stringify(opts.body);
+    }
+    return fetch(path, opts).then(function (response) {
+      return response.json().catch(function () { return {}; }).then(function (body) {
+        clearTimeout(timer);
+        if (!response.ok) {
+          var detail = body.detail ||
+            (Array.isArray(body.conflicts) && body.conflicts.length
+              ? "already exists: " + body.conflicts.join(", ")
+              : null);
+          if (Array.isArray(detail)) {
+            detail = detail.map(function (item) { return item.msg || JSON.stringify(item); }).join("; ");
+          }
+          var error = new Error(detail || ("Request failed (" + response.status + ")"));
+          error.saved = body.saved;
+          throw error;
+        }
+        return body;
+      });
+    }, function (failure) {
+      clearTimeout(timer);
+      if (failure.name === "AbortError") {
+        throw new Error("Request timed out — try again");
+      }
+      throw failure;
+    });
+  }
+
+  function parseSettings(raw) {
+    if (typeof raw === "string") {
+      try { return JSON.parse(raw || "{}"); } catch (e) { return {}; }
+    }
+    return raw || {};
+  }
+
+  function chip(text, extraClass) {
+    var span = document.createElement("span");
+    span.className = "chip" + (extraClass ? " " + extraClass : "");
+    span.textContent = text;
+    return span;
+  }
+
+  function buildCard(row, count) {
+    var card = document.createElement("article");
+    card.className = "instance-card";
+    card.setAttribute("data-inbound-id", row.id);
+    card.setAttribute("data-enabled", row.enabled ? "1" : "0");
+
+    var header = document.createElement("div");
+    header.className = "card-header " + (row.enabled ? "active" : "inactive");
+    var dot = document.createElement("span");
+    dot.className = "status-dot";
+    var name = document.createElement("strong");
+    name.textContent = row.remark || row.id;
+    header.appendChild(dot);
+    header.appendChild(name);
+    header.appendChild(chip(row.protocol, "chip-" + row.protocol));
+
+    var body = document.createElement("div");
+    body.className = "card-body";
+    var portLine = document.createElement("p");
+    var portLabel = document.createElement("strong");
+    portLabel.className = "mono";
+    portLabel.textContent = ":" + row.port;
+    portLine.appendChild(portLabel);
+    portLine.appendChild(chip(row.settings.transport || "tcp"));
+    portLine.appendChild(chip(row.settings.security || "none"));
+    var listenLine = document.createElement("p");
+    listenLine.className = "card-small";
+    listenLine.textContent = "Listen: " + row.listen;
+    var countLine = document.createElement("p");
+    countLine.className = "card-small";
+    countLine.textContent = count + " user(s) assigned";
+    var slot = document.createElement("p");
+    slot.className = "alert alert-error";
+    slot.setAttribute("data-error-for", row.id);
+    slot.hidden = true;
+    body.appendChild(portLine);
+    body.appendChild(listenLine);
+    body.appendChild(countLine);
+    body.appendChild(slot);
+
+    var actions = document.createElement("div");
+    actions.className = "card-actions";
+    var toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "btn btn-sm btn-warning";
+    toggle.setAttribute("data-action", "toggle");
+    toggle.textContent = row.enabled ? "Disable" : "Enable";
+    var edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "btn btn-sm";
+    edit.setAttribute("data-action", "edit");
+    edit.textContent = "Edit";
+    var del = document.createElement("button");
+    del.type = "button";
+    del.className = "btn btn-sm btn-danger";
+    del.setAttribute("data-action", "delete");
+    del.textContent = "Delete";
+    actions.appendChild(toggle);
+    actions.appendChild(edit);
+    actions.appendChild(del);
+
+    card.appendChild(header);
+    card.appendChild(body);
+    card.appendChild(actions);
+    return card;
+  }
+
+  function renderCards() {
+    inboundsList.textContent = "";
+    rows.forEach(function (row) {
+      inboundsList.appendChild(buildCard(row, counts[row.id] || 0));
+    });
+    emptyHint.hidden = rows.length > 0;
+  }
+
+  function refresh() {
+    return api("/api/inbounds").then(function (data) {
+      rows = (data.inbounds || []).map(function (row) {
+        row.settings = parseSettings(row.settings);
+        return row;
+      });
+      counts = data.user_counts || {};
+      renderCards();
+    });
+  }
+
+  function setOptions(select, allowed, current) {
+    // keep every option in the DOM (labels/tests), hide the disallowed ones
+    Array.prototype.forEach.call(select.options, function (option) {
+      option.hidden = allowed.indexOf(option.value) === -1;
+    });
+    if (allowed.indexOf(current) === -1) {
+      select.value = allowed[0];
+      return true; // current was pruned
+    }
+    select.value = current;
+    return false;
+  }
+
+  function pruneKeys(keys) {
+    keys.forEach(function (key) { delete state.settings[key]; });
+  }
+
+  function applyVisibility() {
+    var protocol = el.protocol.value;
+    var transport = el.transport.value;
+    var security = el.security.value;
+
+    setOptions(el.transport, TRANSPORTS_BY_PROTOCOL[protocol], transport);
+    setOptions(el.security, SECURITY_BY_PROTOCOL[protocol], security);
+    transport = el.transport.value;
+    security = el.security.value;
+
+    // prune settings keys that no longer belong to the visible combination
+    Object.keys(TRANSPORT_KEYS).forEach(function (name) {
+      if (name !== transport) pruneKeys(TRANSPORT_KEYS[name]);
+    });
+    if (transport !== "xhttp") pruneKeys(["mode"]);
+    if (transport !== "grpc") pruneKeys(["serviceName"]);
+    if (security !== "tls") pruneKeys(TLS_KEYS);
+    if (security !== "reality") pruneKeys(REALITY_KEYS);
+
+    document.querySelectorAll("[data-group]").forEach(function (group) {
+      var name = group.getAttribute("data-group");
+      var visible = (name === transport) || (name === security);
+      group.hidden = !visible;
+    });
+    if (security !== "reality") {
+      el.publicKey.value = "";
+    }
+  }
+
+  function fillForm(row) {
+    var s = state.settings;
+    el.protocol.value = row.protocol;
+    el.port.value = row.port;
+    el.listen.value = row.listen || "0.0.0.0";
+    el.remark.value = row.remark || "";
+    el.enabled.checked = !!row.enabled;
+    el.transport.value = s.transport || "tcp";
+    el.security.value = s.security || "none";
+    el.path.value = s.path || "";
+    el.host.value = s.host || "";
+    el.service.value = s.serviceName || "";
+    el.xpath.value = (s.transport === "xhttp" ? s.path : "") || "";
+    el.mode.value = s.mode || "";
+    el.cert.value = s.cert_file || "";
+    el.key.value = s.key_file || "";
+    el.dest.value = s.dest || "";
+    el.serverNames.value = (s.server_names || []).join(", ");
+    el.shortIds.value = (s.short_ids || []).join(", ");
+    el.fp.value = s.fp || "chrome";
+    el.flow.value = s.flow || "xtls-rprx-vision";
+    el.publicKey.value = s.public_key || "";
+  }
+
+  function openModal(row) {
+    state.mode = row ? "edit" : "create";
+    state.row = row || null;
+    state.settings = row ? JSON.parse(JSON.stringify(row.settings || {})) : {};
+    formError.hidden = true;
+    notice.hidden = true;
+    showError(el.jsonError, "");
+    el.json.value = "";
+    document.getElementById("advanced-details").open = false;
+    modalTitle.textContent = row ? "Edit inbound — " + row.id : "Add inbound";
+
+    if (row) {
+      fillForm(row);
+      // the API allows changing protocol, but it silently breaks assigned
+      // users' configs — the UI locks it until the inbound has no users.
+      el.protocol.disabled = (counts[row.id] || 0) > 0;
+    } else {
+      el.protocol.disabled = false;
+      el.protocol.value = "vless";
+      el.port.value = "";
+      el.listen.value = "0.0.0.0";
+      el.remark.value = "";
+      el.enabled.checked = true;
+      el.transport.value = "tcp";
+      el.security.value = "none";
+      el.path.value = "";
+      el.host.value = "";
+      el.service.value = "";
+      el.xpath.value = "";
+      el.mode.value = "";
+      el.cert.value = "";
+      el.key.value = "";
+      el.dest.value = "";
+      el.serverNames.value = "";
+      el.shortIds.value = "";
+      el.fp.value = "chrome";
+      el.flow.value = "xtls-rprx-vision";
+      el.publicKey.value = "";
+    }
+    applyVisibility();
+    modal.hidden = false;
+  }
+
+  function closeModal() {
+    modal.hidden = true;
+    state = { mode: "create", row: null, settings: {} };
+  }
+
+  function cardError(id, message) {
+    var slot = inboundsList.querySelector('[data-error-for="' + id + '"]');
+    if (slot) showError(slot, message);
+  }
+
+  function handleToggle(row, card) {
+    console.warn("toggle lands in Task 5", row && row.id, card && card.getAttribute("data-inbound-id"));
+  }
+
+  function handleDelete(row) {
+    console.warn("delete lands in Task 5", row && row.id);
+  }
+
+  function rowForCard(card) {
+    var id = card.getAttribute("data-inbound-id");
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].id === id) return rows[i];
+    }
+    return null;
+  }
+
+  document.getElementById("add-inbound").addEventListener("click", function () {
+    openModal(null);
+  });
+  document.getElementById("inbound-modal-close").addEventListener("click", closeModal);
+  document.getElementById("inbound-cancel").addEventListener("click", closeModal);
+  modal.addEventListener("click", function (event) {
+    if (event.target === modal) closeModal();
+  });
+  document.getElementById("copy-public-key").addEventListener("click", function () {
+    if (el.publicKey.value && navigator.clipboard) {
+      navigator.clipboard.writeText(el.publicKey.value);
+    }
+  });
+  el.protocol.addEventListener("change", applyVisibility);
+  el.transport.addEventListener("change", applyVisibility);
+  el.security.addEventListener("change", applyVisibility);
+
+  inboundsList.addEventListener("click", function (event) {
+    var button = event.target.closest("[data-action]");
+    if (!button) return;
+    var card = button.closest(".instance-card");
+    var row = rowForCard(card);
+    var action = button.getAttribute("data-action");
+    if (action === "edit" && row) {
+      openModal(row);
+    } else if (action === "toggle") {
+      handleToggle(row, card);
+    } else if (action === "delete" && row) {
+      handleDelete(row);
+    }
+  });
+
+  refresh().catch(function (error) {
+    showError(document.getElementById("list-error") || formError,
+      "Could not load inbounds: " + error.message);
+  });
+})();
+</script>
 {% endblock %}
