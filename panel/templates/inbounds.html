@@ -302,19 +302,15 @@
     }
   }
 
-  function fillForm(row) {
+  // settings-only half of fillForm: state.settings -> structured inputs
+  function syncInputsFromSettings() {
     var s = state.settings;
-    el.protocol.value = row.protocol;
-    el.port.value = row.port;
-    el.listen.value = row.listen || "0.0.0.0";
-    el.remark.value = row.remark || "";
-    el.enabled.checked = !!row.enabled;
     el.transport.value = s.transport || "tcp";
     el.security.value = s.security || "none";
     el.path.value = s.path || "";
     el.host.value = s.host || "";
     el.service.value = s.serviceName || "";
-    el.xpath.value = (s.transport === "xhttp" ? s.path : "") || "";
+    el.xpath.value = s.path || "";
     el.mode.value = s.mode || "";
     el.cert.value = s.cert_file || "";
     el.key.value = s.key_file || "";
@@ -324,6 +320,41 @@
     el.fp.value = s.fp || "chrome";
     el.flow.value = s.flow || "xtls-rprx-vision";
     el.publicKey.value = s.public_key || "";
+  }
+
+  function fillForm(row) {
+    el.protocol.value = row.protocol;
+    el.port.value = row.port;
+    el.listen.value = row.listen || "0.0.0.0";
+    el.remark.value = row.remark || "";
+    el.enabled.checked = !!row.enabled;
+    syncInputsFromSettings();
+  }
+
+  function openAdvanced() {
+    el.json.value = JSON.stringify(state.settings, null, 2);
+    showError(el.jsonError, "");
+  }
+
+  function applyJson() {
+    var parsed;
+    try {
+      parsed = JSON.parse(el.json.value || "{}");
+    } catch (e) {
+      showError(el.jsonError, "Invalid JSON: " + e.message);
+      return; // no state change (spec §3.4)
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      showError(el.jsonError, "Invalid JSON: settings must be a JSON object");
+      return;
+    }
+    showError(el.jsonError, "");
+    state.settings = parsed;
+    // recognized keys re-fill the structured fields; unknown keys
+    // (stream_settings_extra, spiderX, ...) stay in state.settings and
+    // ride along on save.
+    syncInputsFromSettings();
+    applyVisibility();
   }
 
   function openModal(row) {
@@ -535,6 +566,10 @@
   });
   form.addEventListener("input", syncFromForm);
   form.addEventListener("submit", submitInbound);
+  document.getElementById("advanced-details").addEventListener("toggle", function (event) {
+    if (event.target.open) openAdvanced();
+  });
+  document.getElementById("apply-json").addEventListener("click", applyJson);
 
   inboundsList.addEventListener("click", function (event) {
     var button = event.target.closest("[data-action]");

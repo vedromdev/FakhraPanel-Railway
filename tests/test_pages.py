@@ -206,3 +206,15 @@ def test_inbounds_js_card_actions_copy(settings):
         html = client.get("/inbounds").text
         assert "data-error-for" in html
         assert "cannot connect until re-enabled" in html
+
+
+# --- A3 Task 6: advanced raw-JSON ---------------------------------------------
+
+
+def test_inbounds_js_advanced_json_contract(settings):
+    with TestClient(create_app(settings)) as client:
+        client.app.state.manager = FakeManager()
+        _login(client, settings)
+        html = client.get("/inbounds").text
+        assert "applyJson" in html
+        assert "Invalid JSON" in html
