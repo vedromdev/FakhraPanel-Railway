@@ -654,6 +654,29 @@ def test_update_inbound_changes_port_and_settings(auth_client):
     assert json.loads(row["settings"])["path"] == "/u"
 
 
+def test_update_inbound_returns_firewall_hint(auth_client):
+    resp = auth_client.put(
+        "/api/inbounds/vless",
+        json={"protocol": "vless", "port": 2053, "listen": "0.0.0.0",
+              "remark": "", "enabled": True, "settings": {}},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["firewall_hint"] == "ufw allow 2053/tcp"
+
+
+def test_update_inbound_preopened_port_no_hint(auth_client):
+    resp = auth_client.put(
+        "/api/inbounds/vless",
+        json={"protocol": "vless", "port": 443, "listen": "0.0.0.0",
+              "remark": "", "enabled": True,
+              "settings": {"security": "reality",
+                           "dest": "www.apple.com:443",
+                           "server_names": ["www.apple.com"]}},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["firewall_hint"] is None
+
+
 def test_list_includes_user_counts(auth_client):
     _create(auth_client)
 

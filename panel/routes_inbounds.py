@@ -126,7 +126,12 @@ def update_inbound(inbound_id: str, body: InboundCreate, request: Request) -> JS
     )
     if not ok:
         return _apply_failure(msg)
-    return JSONResponse(content={"inbound": db.get_inbound(inbound_id)})
+    return JSONResponse(
+        content={
+            "inbound": db.get_inbound(inbound_id),
+            "firewall_hint": inbounds.firewall_hint(row["port"]),
+        }
+    )
 
 
 @router.delete("/inbounds/{inbound_id}")
