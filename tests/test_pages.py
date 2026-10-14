@@ -125,3 +125,41 @@ def test_dashboard_js_surfaces_bulk_conflicts(settings):
         assert "body.conflicts" in html
         # The dead indexOf("already exists") special-case is removed.
         assert 'indexOf("already exists")' not in html
+
+
+# --- A3 Task 2: /inbounds page -----------------------------------------------
+
+
+def test_inbounds_page_requires_auth(settings):
+    with TestClient(create_app(settings)) as client:
+        response = client.get("/inbounds", follow_redirects=False)
+        assert response.status_code == 302
+        assert response.headers["location"] == "/login"
+
+
+def test_inbounds_page_renders_seeds_and_editor_contract(settings):
+    with TestClient(create_app(settings)) as client:
+        client.app.state.manager = FakeManager()
+        _login(client, settings)
+        response = client.get("/inbounds")
+        assert response.status_code == 200
+        html = response.text
+        for inbound_id, port in (("vless", "443"), ("vmess", "10002"),
+                                 ("trojan", "10003"), ("ss", "10004")):
+            assert f'data-inbound-id="{inbound_id}"' in html
+            assert port in html
+        assert 'id="add-inbound"' in html
+        assert 'id="inbound-modal"' in html
+        assert 'id="inbounds-list"' in html
+        for group in ("ws", "grpc", "xhttp", "tls", "reality"):
+            assert f'data-group="{group}"' in html
+
+
+def test_nav_links_between_dashboard_and_inbounds(settings):
+    with TestClient(create_app(settings)) as client:
+        client.app.state.manager = FakeManager()
+        _login(client, settings)
+        assert 'href="/inbounds"' in client.get("/").text
+        page = client.get("/inbounds")
+        assert page.status_code == 200
+        assert 'href="/"' in page.text

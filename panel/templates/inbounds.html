@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }} — Inbounds{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/style.css">
+{% endblock %}
+
+{% block content %}
+<div class="container">
+  <div class="header">
+    <h1>Inbounds</h1>
+    <div class="user-info">
+      <a class="btn btn-sm btn-secondary" href="/">Dashboard</a>
+      <a class="btn btn-sm btn-secondary" href="/logout">Log out</a>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <button type="button" class="btn" id="add-inbound">Add Inbound</button>
+  </div>
+
+  <section class="instances-list">
+    <div class="instances-grid" id="inbounds-list">
+      {% for row in inbounds %}
+      <article class="instance-card" data-inbound-id="{{ row.id }}" data-enabled="{{ 1 if row.enabled else 0 }}">
+        <div class="card-header {{ 'active' if row.enabled else 'inactive' }}">
+          <span class="status-dot"></span>
+          <strong>{{ row.remark or row.id }}</strong>
+          <span class="chip chip-{{ row.protocol }}">{{ row.protocol }}</span>
+        </div>
+        <div class="card-body">
+          <p><strong class="mono">:</strong><strong class="mono">{{ row.port }}</strong>
+            <span class="chip">{{ row.settings.get("transport", "tcp") }}</span>
+            <span class="chip">{{ row.settings.get("security", "none") }}</span></p>
+          <p class="card-small">Listen: <span class="mono">{{ row.listen }}</span></p>
+          <p class="card-small">{{ user_counts.get(row.id, 0) }} user(s) assigned</p>
+          <p class="alert alert-error" data-error-for="{{ row.id }}" hidden></p>
+        </div>
+        <div class="card-actions">
+          <button type="button" class="btn btn-sm btn-warning" data-action="toggle">{{ 'Disable' if row.enabled else 'Enable' }}</button>
+          <button type="button" class="btn btn-sm" data-action="edit">Edit</button>
+          <button type="button" class="btn btn-sm btn-danger" data-action="delete">Delete</button>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+    <p class="card-small" id="empty-hint" {% if inbounds %}hidden{% endif %}>No inbounds yet.</p>
+  </section>
+</div>
+
+{% include "inbound_modal.html" %}
+{% endblock %}

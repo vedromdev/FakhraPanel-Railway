@@ -1,0 +1,142 @@
+<div id="inbound-modal" class="modal-backdrop" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="inbound-modal-title">
+    <div class="modal-header">
+      <h3 id="inbound-modal-title">Inbound</h3>
+      <button type="button" class="btn-close" id="inbound-modal-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p id="inbound-notice" class="alert alert-success" hidden></p>
+      <p id="inbound-error" class="alert alert-error" role="alert" hidden></p>
+      <form id="inbound-form">
+        <h4>Basics</h4>
+        <div class="form-group">
+          <label for="inbound-protocol">Protocol</label>
+          <select id="inbound-protocol" name="protocol">
+            <option value="vless">vless</option>
+            <option value="vmess">vmess</option>
+            <option value="trojan">trojan</option>
+            <option value="ss">shadowsocks (ss)</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="inbound-port">Port</label>
+            <input id="inbound-port" name="port" type="number" min="1" max="65535" required>
+          </div>
+          <div class="form-group">
+            <label for="inbound-listen">Listen</label>
+            <input id="inbound-listen" name="listen" type="text" value="0.0.0.0">
+          </div>
+          <div class="form-group">
+            <label for="inbound-remark">Remark</label>
+            <input id="inbound-remark" name="remark" type="text" placeholder="optional label">
+          </div>
+        </div>
+        <div class="form-group">
+          <label><input id="inbound-enabled" name="enabled" type="checkbox" checked> Enabled</label>
+        </div>
+
+        <h4>Transport</h4>
+        <div class="form-group">
+          <label for="inbound-transport">Transport</label>
+          <select id="inbound-transport" name="transport">
+            <option value="tcp">tcp</option>
+            <option value="ws">ws</option>
+            <option value="grpc">grpc</option>
+            <option value="xhttp">xhttp</option>
+          </select>
+        </div>
+        <div class="form-row" data-group="ws" hidden>
+          <div class="form-group">
+            <label for="inbound-path">WS path</label>
+            <input id="inbound-path" type="text" placeholder="/ws">
+          </div>
+          <div class="form-group">
+            <label for="inbound-host">WS host</label>
+            <input id="inbound-host" type="text" placeholder="example.com">
+          </div>
+        </div>
+        <div class="form-group" data-group="grpc" hidden>
+          <label for="inbound-service">gRPC service name</label>
+          <input id="inbound-service" type="text" placeholder="GunService">
+        </div>
+        <div class="form-row" data-group="xhttp" hidden>
+          <div class="form-group">
+            <label for="inbound-xpath">xhttp path</label>
+            <input id="inbound-xpath" type="text" placeholder="/x">
+          </div>
+          <div class="form-group">
+            <label for="inbound-mode">xhttp mode</label>
+            <input id="inbound-mode" type="text" placeholder="packet-up">
+          </div>
+        </div>
+
+        <h4>Security</h4>
+        <div class="form-group">
+          <label for="inbound-security">Security</label>
+          <select id="inbound-security" name="security">
+            <option value="none">none</option>
+            <option value="tls">tls</option>
+            <option value="reality">reality</option>
+          </select>
+        </div>
+        <div class="form-row" data-group="tls" hidden>
+          <div class="form-group">
+            <label for="inbound-cert">Certificate file</label>
+            <input id="inbound-cert" type="text" placeholder="/path/to/fullchain.pem">
+          </div>
+          <div class="form-group">
+            <label for="inbound-key">Key file</label>
+            <input id="inbound-key" type="text" placeholder="/path/to/privkey.pem">
+          </div>
+        </div>
+        <div data-group="reality" hidden>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="inbound-dest">Dest (masquerade target)</label>
+              <input id="inbound-dest" type="text" placeholder="www.apple.com:443">
+            </div>
+            <div class="form-group">
+              <label for="inbound-fp">Fingerprint (fp)</label>
+              <input id="inbound-fp" type="text" value="chrome">
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="inbound-server-names">Server names (comma-separated)</label>
+            <input id="inbound-server-names" type="text" placeholder="www.apple.com">
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="inbound-short-ids">Short IDs (comma-separated)</label>
+              <input id="inbound-short-ids" type="text" placeholder="auto-generated when empty">
+            </div>
+            <div class="form-group">
+              <label for="inbound-flow">Flow</label>
+              <input id="inbound-flow" type="text" value="xtls-rprx-vision">
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="inbound-public-key">Public key (for clients)</label>
+            <input id="inbound-public-key" type="text" readonly>
+            <button type="button" class="btn btn-sm btn-secondary" id="copy-public-key">Copy public key</button>
+          </div>
+        </div>
+
+        <details id="advanced-details">
+          <summary>Advanced (raw JSON)</summary>
+          <div class="form-group">
+            <label for="inbound-json">Settings JSON — structured fields above stay in sync; unknown keys (e.g. stream_settings_extra) are preserved on save. Changing the REALITY private key here invalidates every existing client config.</label>
+            <textarea id="inbound-json" rows="8" spellcheck="false"></textarea>
+          </div>
+          <p id="json-error" class="alert alert-error" hidden></p>
+          <button type="button" class="btn btn-sm btn-secondary" id="apply-json">Apply JSON to form</button>
+        </details>
+
+        <div class="modal-footer">
+          <button type="submit" class="btn btn-full" id="inbound-save">Save</button>
+          <button type="button" class="btn btn-secondary btn-full" id="inbound-cancel">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>

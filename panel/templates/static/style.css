@@ -401,3 +401,61 @@ body {
     background: var(--success);
     border-radius: 4px;
 }
+
+/* --- A3: inbound editor ---------------------------------------------------- */
+.toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.chip {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--input);
+    color: var(--muted);
+    font-size: 0.75rem;
+    line-height: 1.4;
+}
+
+.chip-vless { color: #58a6ff; border-color: #58a6ff44; }
+.chip-vmess { color: var(--success); border-color: #3fb95044; }
+.chip-trojan { color: #d29922; border-color: #d2992244; }
+.chip-ss { color: #bc8cff; border-color: #bc8cff44; }
+
+#inbound-json {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--input);
+    color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.85rem;
+    resize: vertical;
+}
+
+#advanced-details {
+    margin: 12px 0;
+}
+
+#advanced-details summary {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 0.9rem;
+    margin-bottom: 8px;
+}
+
+.modal-footer {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 16px;
+}
