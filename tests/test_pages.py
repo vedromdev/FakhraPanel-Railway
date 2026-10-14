@@ -194,3 +194,15 @@ def test_inbounds_js_save_paths_and_error_copy(settings):
         assert 'method: "PUT"' in html
         assert "Nothing was saved" in html
         assert "firewall_hint" in html
+
+
+# --- A3 Task 5: card actions -------------------------------------------------
+
+
+def test_inbounds_js_card_actions_copy(settings):
+    with TestClient(create_app(settings)) as client:
+        client.app.state.manager = FakeManager()
+        _login(client, settings)
+        html = client.get("/inbounds").text
+        assert "data-error-for" in html
+        assert "cannot connect until re-enabled" in html

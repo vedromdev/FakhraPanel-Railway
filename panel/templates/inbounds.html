@@ -460,11 +460,44 @@
   }
 
   function handleToggle(row, card) {
-    console.warn("toggle lands in Task 5", row && row.id, card && card.getAttribute("data-inbound-id"));
+    if (!row) return;
+    var count = counts[row.id] || 0;
+    if (row.enabled && count > 0) {
+      var ok = confirm("Disabling drops this inbound from the running config — its " +
+        count + " users cannot connect until re-enabled.");
+      if (!ok) return;
+    }
+    // no toggle endpoint: full-row PUT with enabled flipped; the card's
+    // DOM only updates via refresh() after the 200 (no optimistic UI).
+    var payload = {
+      protocol: row.protocol,
+      port: row.port,
+      listen: row.listen,
+      remark: row.remark || "",
+      enabled: !row.enabled,
+      settings: row.settings
+    };
+    api("/api/inbounds/" + encodeURIComponent(row.id),
+        { method: "PUT", body: payload })
+      .then(function () { return refresh(); })
+      .catch(function (error) {
+        showError(card.querySelector("[data-error-for]"),
+          error.saved === false
+            ? "Nothing was saved — xray rejected the config: " + error.message
+            : error.message);
+      });
   }
 
-  function handleDelete(row) {
-    console.warn("delete lands in Task 5", row && row.id);
+  function handleDelete(row, card) {
+    if (!row) return;
+    var ok = confirm((row.remark || row.id) + " on port " + row.port +
+      " — delete this inbound?");
+    if (!ok) return;
+    api("/api/inbounds/" + encodeURIComponent(row.id), { method: "DELETE" })
+      .then(function () { return refresh(); })
+      .catch(function (error) {
+        showError(card.querySelector("[data-error-for]"), error.message);
+      });
   }
 
   function rowForCard(card) {
@@ -514,7 +547,7 @@
     } else if (action === "toggle") {
       handleToggle(row, card);
     } else if (action === "delete" && row) {
-      handleDelete(row);
+      handleDelete(row, card);
     }
   });
 
