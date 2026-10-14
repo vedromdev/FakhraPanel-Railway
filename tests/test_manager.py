@@ -2,9 +2,11 @@
 
 import os
 import signal
+import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -269,3 +271,73 @@ def test_lifespan_starts_manager(settings):
         assert mgr is not None
         assert mgr.is_running()
     assert not mgr.is_running()  # shutdown stopped the process
+
+
+# --- Task 4: five-gate inbound apply ----------------------------------------
+
+def test_apply_inbound_change_rejects_before_commit(manager, monkeypatch):
+    commit, revert = Mock(), Mock()
+    monkeypatch.setattr(
+        manager, "test_config_file", lambda path: (False, "boom -test rejected")
+    )
+
+    ok, msg = manager.apply_inbound_change([_user()], _inbounds(), commit, revert)
+
+    assert not ok
+    assert "boom" in msg
+    commit.assert_not_called()  # validation failed -> DB untouched
+    revert.assert_not_called()
+    assert not manager.config_path.exists()
+
+
+def test_apply_inbound_change_occupied_port_reports(manager):
+    commit, revert = Mock(), Mock()
+    holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    holder.bind(("127.0.0.1", 0))
+    holder.listen(1)
+    port = holder.getsockname()[1]
+    proposed = [{**_inbounds()[0], "port": port, "listen": "127.0.0.1"}]
+    try:
+        ok, msg = manager.apply_inbound_change([], proposed, commit, revert)
+    finally:
+        holder.close()
+
+    assert not ok
+    assert str(port) in msg and "in use" in msg
+    commit.assert_not_called()  # occupied -> rejected BEFORE commit
+    revert.assert_not_called()
+
+
+def test_apply_inbound_change_reverts_db_on_restart_failure(manager, monkeypatch):
+    ok, msg = manager.apply_config([_user()], _inbounds())
+    assert ok, msg
+    old_config = manager.config_path.read_bytes()
+    commit, revert = Mock(), Mock()
+
+    monkeypatch.setattr(manager, "restart", lambda: False)
+
+    ok, msg = manager.apply_inbound_change(
+        [_user()], [{**_inbounds()[0], "port": 23456}], commit, revert
+    )
+
+    assert not ok
+    commit.assert_called_once()  # gates passed, THEN commit
+    revert.assert_called_once()  # restart failed -> DB rolled back
+    assert manager.config_path.read_bytes() == old_config  # file rolled back
+    assert _wait(manager.is_running, timeout=5.0)  # old config re-served
+
+
+def test_apply_inbound_change_commits_on_success(manager):
+    ok, msg = manager.apply_config([_user()], _inbounds())
+    assert ok, msg
+    commit, revert = Mock(), Mock()
+    proposed = [{**_inbounds()[0], "port": 23457}]
+
+    ok, msg = manager.apply_inbound_change([_user()], proposed, commit, revert)
+
+    assert ok, msg
+    commit.assert_called_once()
+    revert.assert_not_called()
+    assert '"port": 23457' in manager.config_path.read_text(encoding="utf-8")
+    assert manager.last_error == ""
+    assert manager.is_running()

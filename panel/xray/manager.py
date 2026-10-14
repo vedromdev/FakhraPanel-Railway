@@ -5,6 +5,7 @@ with `xray run -test` first, swapped in atomically only on success, and the
 previous config is restored (and re-served) if the restart then fails.
 """
 
+import json
 import os
 import shutil
 import signal
@@ -13,9 +14,10 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from typing import Callable
 
 from panel.config import Settings
-from panel.xray import config_builder
+from panel.xray import config_builder, ports
 
 TEST_TIMEOUT_S = 10.0  # `xray run -test` must answer within this
 STOP_TIMEOUT_S = 5.0  # SIGTERM grace before SIGKILL
@@ -149,6 +151,106 @@ class XrayManager:
             return True, "ok"
         finally:
             candidate.unlink(missing_ok=True)  # consumed by replace; else stale
+
+    def apply_inbound_change(
+        self,
+        users: list[dict],
+        proposed_inbounds: list[dict],
+        commit: Callable[[], None],
+        revert: Callable[[], None],
+    ) -> tuple[bool, str]:
+        """Five-gate inbound save (spec §5): build → xray -test → bind probe →
+        commit() → atomic swap + restart, with file+DB rollback on restart fail.
+
+        The callbacks run ONLY in their gate position: validation failures
+        (gates 1–2) call neither, so a rejected save persists nothing.
+        """
+        try:
+            with self._lock:
+                if self._stopped:
+                    return False, "manager stopped"
+                return self._apply_inbound_change(
+                    users, proposed_inbounds, commit, revert
+                )
+        except Exception as exc:  # contract: callers get (False, reason), not a raise
+            self.last_error = f"apply_inbound_change failed: {exc}"
+            return False, self.last_error
+
+    def _apply_inbound_change(
+        self,
+        users: list[dict],
+        proposed_inbounds: list[dict],
+        commit: Callable[[], None],
+        revert: Callable[[], None],
+    ) -> tuple[bool, str]:
+        cfg = config_builder.build_config(
+            proposed_inbounds, users, self.public_host
+        )
+        fd, name = tempfile.mkstemp(
+            dir=self._xray_dir, prefix="config-", suffix=".next.json"
+        )
+        os.close(fd)
+        candidate = Path(name)
+        try:
+            config_builder.write_config(candidate, cfg)
+
+            # Gate 1: xray -test — bad config never reaches the DB
+            ok, output = self.test_config_file(candidate)
+            if not ok:
+                self.last_error = output
+                return False, output
+
+            # Gate 2: bind probe — only ports the running config doesn't
+            # already own (our own xray holds those legitimately)
+            current_ports = self._running_ports()
+            for row in proposed_inbounds:
+                if not row.get("enabled", 1):
+                    continue
+                port = int(row["port"])
+                if port in current_ports:
+                    continue
+                if not ports.port_available(port, row.get("listen") or "0.0.0.0"):
+                    reason = f"port {port} already in use"
+                    self.last_error = reason
+                    return False, reason  # neither callback ran
+
+            # Gate 3: commit the DB write — only after both validations passed
+            commit()
+
+            # Gate 4: atomic swap + restart
+            had_previous = self.config_path.exists()
+            if had_previous:
+                shutil.copy2(self.config_path, self.backup_path)
+            os.replace(candidate, self.config_path)
+
+            if not self.restart():
+                # Gate 5: rollback file + revert DB + re-serve the old config
+                reason = self.last_error or "xray restart failed"
+                if had_previous:
+                    shutil.copy2(self.backup_path, self.config_path)
+                    revert()
+                    self.start()  # keep the old config serving
+                else:
+                    self.config_path.unlink(missing_ok=True)
+                    revert()
+                return False, reason
+
+            self.last_error = ""
+            return True, "ok"
+        finally:
+            candidate.unlink(missing_ok=True)
+
+    def _running_ports(self) -> set[int]:
+        """Ports the current on-disk config binds (read fresh at probe time)."""
+        try:
+            cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return set()  # no config yet: every proposed port gets probed
+        return {
+            int(inbound["port"])
+            for inbound in cfg.get("inbounds", [])
+            if inbound.get("port") is not None
+        }
 
     def start(self) -> bool:
         """Spawn xray with the current config; no double-spawn.
