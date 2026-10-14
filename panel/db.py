@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import json
 import secrets
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -9,8 +10,11 @@ from pathlib import Path
 from typing import Callable, Literal
 
 from panel.constants import DEFAULT_SS_METHOD
+from panel.xray import keys as x25519_keys
 
 _db_path: Path | None = None
+
+CURRENT_SCHEMA_VERSION = 2
 
 _USER_COLUMNS = (
     "id",
@@ -28,6 +32,8 @@ _USER_COLUMNS = (
     "last_raw_bytes",
     "note",
     "created_at",
+    "inbound_id",
+    "sub_token",
 )
 
 _SCHEMA = f"""
@@ -87,6 +93,121 @@ def _connect() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
+
+
+_INBOUNDS_DDL = """
+CREATE TABLE IF NOT EXISTS inbounds (
+  id TEXT PRIMARY KEY,
+  protocol TEXT NOT NULL CHECK (protocol IN ('vless','vmess','trojan','ss')),
+  listen TEXT NOT NULL DEFAULT '0.0.0.0',
+  port INTEGER NOT NULL UNIQUE,
+  remark TEXT NOT NULL DEFAULT '',
+  settings TEXT NOT NULL DEFAULT '{}',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+"""
+
+
+def _seed_inbounds() -> list[tuple]:
+    """The four v0.2 defaults; protocol-named ids keep stats continuity."""
+    now = datetime.now(timezone.utc).isoformat()
+    private_key, public_key = x25519_keys.generate_keypair()
+    vless_settings = json.dumps(
+        {
+            "transport": "tcp",
+            "security": "reality",
+            "flow": "xtls-rprx-vision",
+            "private_key": private_key,
+            "public_key": public_key,
+            "server_names": ["www.microsoft.com"],
+            "dest": "www.microsoft.com:443",
+            "short_ids": [secrets.token_hex(4)],
+            "fp": "chrome",
+        }
+    )
+    ws = json.dumps({"transport": "ws", "security": "none", "path": "/"})
+    plain = json.dumps({"transport": "tcp", "security": "none"})
+    return [
+        ("vless", 443, vless_settings, now),
+        ("vmess", 10002, ws, now),
+        ("trojan", 10003, plain, now),
+        ("ss", 10004, plain, now),
+    ]
+
+
+def migrate() -> None:
+    """Idempotent v1→v2 upgrade: inbounds table, users columns, seeds, backfill.
+
+    Fresh databases run the same path as old ones (_SCHEMA stays v1-shaped),
+    so there is exactly one upgrade code path. Seeds run only inside the
+    version bump, so an admin-deleted default is never resurrected.
+    """
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key = ?", ("schema_version",)
+        ).fetchone()
+        version = int(row["value"]) if row is not None else 1
+        if version >= CURRENT_SCHEMA_VERSION:
+            return
+        with conn:
+            columns = {
+                info["name"] for info in conn.execute("PRAGMA table_info(users)")
+            }
+            if "inbound_id" not in columns:
+                conn.execute("ALTER TABLE users ADD COLUMN inbound_id TEXT")
+            if "sub_token" not in columns:
+                conn.execute("ALTER TABLE users ADD COLUMN sub_token TEXT")
+            conn.execute(_INBOUNDS_DDL)
+            for protocol, port, settings_json, created_at in _seed_inbounds():
+                conn.execute(
+                    "INSERT OR IGNORE INTO inbounds"
+                    " (id, protocol, port, settings, created_at)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (protocol, protocol, port, settings_json, created_at),
+                )
+            conn.execute(
+                "UPDATE users SET inbound_id = protocol WHERE inbound_id IS NULL"
+            )
+            conn.execute(
+                "UPDATE users SET sub_token = lower(hex(randomblob(16)))"
+                " WHERE sub_token IS NULL"
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_sub_token"
+                " ON users(sub_token)"
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                ("schema_version", str(CURRENT_SCHEMA_VERSION)),
+            )
+    finally:
+        conn.close()
+
+
+def list_inbounds() -> list[dict]:
+    conn = _connect()
+    try:
+        return [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM inbounds ORDER BY created_at, id"
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+
+def get_inbound(inbound_id: str) -> dict | None:
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT * FROM inbounds WHERE id = ?", (inbound_id,)
+        ).fetchone()
+        return dict(row) if row is not None else None
+    finally:
+        conn.close()
 
 
 def _check_columns(data: dict) -> None:

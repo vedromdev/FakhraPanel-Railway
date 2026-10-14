@@ -49,6 +49,7 @@ def ensure_runtime(settings: Settings) -> None:
     )
     _align_secret_key(db_path, settings.SECRET_KEY)
     db.get_or_create_meta("schema_version", lambda: "1")
+    db.migrate()  # bumps schema_version to current; no-op once migrated
     # Re-rendered on every startup: the token is stable but the port may
     # change between deploys. caddy expands the placeholders from the env.
     (data_dir / "Caddyfile").write_text(

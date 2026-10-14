@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import json
 import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -25,6 +26,8 @@ USER_COLUMNS = {
     "last_raw_bytes",
     "note",
     "created_at",
+    "inbound_id",
+    "sub_token",
 }
 
 
@@ -97,8 +100,8 @@ def test_install_token_stable_across_restarts(settings):
     second = db.get_or_create_meta("install_token", lambda: "unused-factory-call")
     assert first == second
     assert first != "unused-factory-call"
-    # ensure_runtime seeds schema_version; a different factory proves it pre-existed
-    assert db.get_or_create_meta("schema_version", lambda: "other") == "1"
+    # ensure_runtime seeds schema_version and migrate() bumps it to current
+    assert db.get_or_create_meta("schema_version", lambda: "other") == "2"
 
 
 def test_ensure_runtime_auto_tls_renders_domain_caddyfile(settings):
@@ -226,3 +229,112 @@ def test_session_roundtrip_and_expiry(settings):
     finally:
         conn.close()
     assert db.get_session("admin", expired_raw) is None
+
+
+def test_migrate_seeds_default_inbounds(settings):
+    bootstrap.ensure_runtime(settings)  # _runtime already ran it once; idempotent
+    rows = {r["id"]: r for r in db.list_inbounds()}
+    assert set(rows) == {"vless", "vmess", "trojan", "ss"}
+    assert rows["vless"]["port"] == 443
+    assert rows["vmess"]["port"] == 10002
+    assert rows["trojan"]["port"] == 10003
+    assert rows["ss"]["port"] == 10004
+    for row in rows.values():
+        assert row["listen"] == "0.0.0.0"
+        assert row["enabled"] == 1
+    vless = json.loads(rows["vless"]["settings"])
+    assert vless["security"] == "reality"
+    assert vless["transport"] == "tcp"
+    assert len(vless["private_key"]) >= 40
+    assert len(vless["public_key"]) >= 40
+    assert vless["server_names"] == ["www.microsoft.com"]
+    assert vless["dest"] == "www.microsoft.com:443"
+    assert len(vless["short_ids"][0]) == 8
+    assert vless["fp"] == "chrome"
+    assert vless["flow"] == "xtls-rprx-vision"
+    assert json.loads(rows["vmess"]["settings"]) == {
+        "transport": "ws", "security": "none", "path": "/"
+    }
+    assert json.loads(rows["trojan"]["settings"]) == {
+        "transport": "tcp", "security": "none"
+    }
+    assert json.loads(rows["ss"]["settings"]) == {
+        "transport": "tcp", "security": "none"
+    }
+    assert db.read_meta("schema_version") == "2"
+
+
+def test_migrate_backfills_users_and_sub_tokens(settings):
+    # a user row written before the migration existed: both columns NULL
+    user = _vless_user()
+    db.create_user(user)
+    conn = sqlite3.connect(settings.data_dir() / "panel.db")
+    try:
+        with conn:
+            conn.execute("UPDATE users SET inbound_id = NULL, sub_token = NULL")
+            conn.execute(
+                "UPDATE meta SET value = '1' WHERE key = 'schema_version'"
+            )
+    finally:
+        conn.close()
+    db.migrate()
+    fetched = db.get_user(user["id"])
+    assert fetched["inbound_id"] == "vless"  # default ids == protocol names
+    assert len(fetched["sub_token"]) == 32
+    int(fetched["sub_token"], 16)  # 32 hex chars, parseable
+    assert db.read_meta("schema_version") == "2"
+
+
+def test_migrate_idempotent(settings):
+    before = db.list_inbounds()
+    db.migrate()
+    db.migrate()
+    assert db.list_inbounds() == before
+    assert db.read_meta("schema_version") == "2"
+
+
+def test_migrate_upgrades_v1_database(tmp_path):
+    v1 = tmp_path / "v1.db"
+    conn = sqlite3.connect(v1)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE users (
+              id TEXT PRIMARY KEY,
+              username TEXT UNIQUE NOT NULL,
+              password TEXT NOT NULL,
+              protocol TEXT NOT NULL CHECK (protocol IN ('vless','vmess','trojan','ss')),
+              uuid TEXT,
+              credential TEXT,
+              ss_method TEXT DEFAULT 'aes-256-gcm',
+              enabled INTEGER DEFAULT 1,
+              disable_reason TEXT,
+              expires_at TEXT,
+              quota_gb REAL,
+              used_bytes INTEGER DEFAULT 0,
+              last_raw_bytes INTEGER DEFAULT 0,
+              note TEXT DEFAULT '',
+              created_at TEXT NOT NULL
+            );
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+            INSERT INTO meta (key, value) VALUES ('schema_version', '1');
+            """
+        )
+        conn.execute(
+            "INSERT INTO users (id, username, password, protocol, created_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), "olduser", "pw-hash", "trojan", "2026-01-01T00:00:00+00:00"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    db.init_db(v1)  # adds the v1-shaped remaining tables to the old file
+    db.migrate()
+    fetched = db.list_users()
+    assert len(fetched) == 1
+    assert fetched[0]["inbound_id"] == "trojan"
+    assert len(fetched[0]["sub_token"]) == 32
+    assert {r["id"] for r in db.list_inbounds()} == {
+        "vless", "vmess", "trojan", "ss"
+    }
+    assert db.read_meta("schema_version") == "2"
