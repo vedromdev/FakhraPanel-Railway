@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     ADMIN_PASSWORD: str
     SECRET_KEY: str = ""
     PUBLIC_HOST: str = ""
+    # VPS mode: Caddy serves PUBLIC_HOST with Let's Encrypt (auto HTTPS on),
+    # owning :80/:443 itself instead of hiding behind an edge proxy.
+    AUTO_TLS: bool = False
     DATA_DIR: str = ""
     XRAY_BIN: str = "xray"
     COOKIE_SECURE: bool = True

@@ -10,6 +10,12 @@ set -euo pipefail
 
 # The public port is caddy's: Railway injects PORT (8080 by default).
 export CADDY_PORT="${CADDY_PORT:-${PORT:-8080}}"
+# AUTO_TLS mode: caddy owns :80 (LE HTTP-01 + redirect) and the
+# {$PUBLIC_HOST} site on :443 — the readiness probe targets 443, and the
+# rendered Caddyfile no longer references CADDY_PORT at all.
+if [ "${AUTO_TLS:-}" = "true" ]; then
+  export CADDY_PORT=443
+fi
 # The panel stays on the loopback backend port the Caddyfile hardcodes.
 export PORT="${PANEL_PORT:-8000}"
 

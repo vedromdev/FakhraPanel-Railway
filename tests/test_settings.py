@@ -25,6 +25,11 @@ def test_data_dir_falls_back_when_missing(monkeypatch):
     assert _settings(DATA_DIR="").data_dir() == Path("./data")
 
 
+def test_auto_tls_defaults_off_and_accepts_env_style_override():
+    assert _settings().AUTO_TLS is False
+    assert _settings(AUTO_TLS=True).AUTO_TLS is True
+
+
 def test_missing_admin_password_fails_fast(monkeypatch):
     # Hermetic: neither the ambient .env (README's own dev flow creates one)
     # nor ambient shell env may satisfy the required fields. _env_file=None

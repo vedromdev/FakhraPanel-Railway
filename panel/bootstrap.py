@@ -52,7 +52,13 @@ def ensure_runtime(settings: Settings) -> None:
     # Re-rendered on every startup: the token is stable but the port may
     # change between deploys. caddy expands the placeholders from the env.
     (data_dir / "Caddyfile").write_text(
-        caddy.render_caddyfile(settings.PORT, install_token), encoding="utf-8"
+        caddy.render_caddyfile(
+            settings.PORT,
+            install_token,
+            auto_tls=settings.AUTO_TLS,
+            public_host=settings.PUBLIC_HOST,
+        ),
+        encoding="utf-8",
     )
 
 

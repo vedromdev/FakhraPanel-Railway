@@ -5,8 +5,8 @@ four mainstream protocols — **VLESS, VMess, Trojan, Shadowsocks** (all over
 WebSocket) — share them as standard `vless://` `vmess://` `trojan://` `ss://`
 links + QR codes that any major client (v2rayNG, V2Box, …) understands, and
 manage **expiry dates, traffic quotas, live stats, bulk creation, and a
-self-service user page** — deployed as a single container on Railway's free
-plan.
+self-service user page** — deployed as a single container: one-command
+install on your own VPS, or any Docker/PaaS host.
 
 - **Admin dashboard** at `/` (login with `ADMIN_USERNAME` / `ADMIN_PASSWORD`).
 - **Self-service page** at `/account` — each user sees only their own link,
@@ -68,7 +68,21 @@ One Railway service, one exposed port, one container running three processes:
 - Share links always use `PUBLIC_HOST:443` with `security=tls` — TLS exists
   only at the Railway edge; everything inside is plain WebSocket.
 
-## Quickstart — Docker (full fidelity, recommended)
+## Quickstart — your own VPS (recommended)
+
+```bash
+git clone https://github.com/vedromdev/FakhraPanel-Railway
+cd FakhraPanel-Railway
+sudo bash install.sh
+```
+
+Ubuntu/Debian with a domain pointed at the server. The installer handles
+Docker, admin credentials, the firewall, BBR kernel tuning, and **Let's
+Encrypt HTTPS** (Caddy owns :80/:443 via `AUTO_TLS=true`), then prints your
+login URL. Full walkthrough + first-deploy checklist: [DEPLOY.md](DEPLOY.md)
+(Option A).
+
+## Quickstart — Docker locally (full fidelity)
 
 ```bash
 git clone https://github.com/vedromdev/FakhraPanel-Railway
@@ -127,6 +141,10 @@ docker compose build test && docker compose run --rm test
 ```
 
 ## Deploy on Railway in 5 steps
+
+> **Have a VPS? Use the installer above instead** — that's the primary path
+> now. Railway banned this project's account under their AUP; this section
+> stays as a walkthrough for Railway-style PaaS hosts that accept it.
 
 A condensed follow-along for the free plan — one service, one container, one
 port. Like the rest of the Railway docs in this repo this is **a walkthrough,

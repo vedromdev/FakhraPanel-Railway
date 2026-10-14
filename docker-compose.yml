@@ -6,6 +6,19 @@ services:
     env_file: .env
     volumes:
       - ./data:/data
+  # VPS deployment: Caddy terminates TLS on :80/:443 for PUBLIC_HOST
+  # (AUTO_TLS=true in .env). Profile-gated so `docker compose up` keeps
+  # starting only the local `panel` service; install.sh targets it by name.
+  vps:
+    profiles: ["vps"]
+    build: .
+    ports:
+      - "80:80"
+      - "443:443"
+    env_file: .env
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
   test:
     build: .
     command: python3 -m pytest tests/ -v

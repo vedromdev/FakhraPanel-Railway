@@ -64,6 +64,39 @@ def test_render_caddyfile_routes_and_tokens():
     assert rendered.count("{$CADDY_PORT}") == rendered.count("$CADDY_PORT")
 
 
+def test_render_caddyfile_auto_tls_serves_domain_with_https_on():
+    rendered = render_caddyfile(
+        8080, "tok", auto_tls=True, public_host="vpn.example.com"
+    )
+    # domain site address; Caddy's automatic HTTPS (LE via HTTP-01 on :80)
+    # must stay enabled, and the plain-port listener must disappear
+    assert "{$PUBLIC_HOST}" in rendered
+    assert "auto_https off" not in rendered
+    assert ":{$CADDY_PORT}" not in rendered
+    # routing is identical to the plain mode
+    for protocol in ("vless", "vmess", "trojan", "ss"):
+        assert f"/ray-{{$VPN_TOKEN}}/{protocol}*" in rendered
+        assert f"reverse_proxy 127.0.0.1:{PORTS[protocol]}" in rendered
+    assert "handle {" in rendered
+    assert "reverse_proxy 127.0.0.1:8000" in rendered
+    assert rendered.count("{$VPN_TOKEN}") == rendered.count("$VPN_TOKEN")
+
+
+def test_render_caddyfile_auto_tls_requires_a_bare_hostname():
+    for bad in (
+        "",
+        "   ",
+        "https://vpn.example.com",
+        "http://vpn.example.com",
+        "vpn.example.com:8443",
+        "vpn.example.com/path",
+        "vpn example com",
+        "vpn.example.com{}",
+    ):
+        with pytest.raises(ValueError, match="PUBLIC_HOST"):
+            render_caddyfile(8080, "tok", auto_tls=True, public_host=bad)
+
+
 # --- helpers ---------------------------------------------------------------
 
 

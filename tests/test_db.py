@@ -101,6 +101,22 @@ def test_install_token_stable_across_restarts(settings):
     assert db.get_or_create_meta("schema_version", lambda: "other") == "1"
 
 
+def test_ensure_runtime_auto_tls_renders_domain_caddyfile(settings):
+    auto = _settings_with(settings, AUTO_TLS=True, PUBLIC_HOST="vpn.example.com")
+    bootstrap.ensure_runtime(auto)
+    rendered = (auto.data_dir() / "Caddyfile").read_text(encoding="utf-8")
+    assert "{$PUBLIC_HOST}" in rendered
+    assert "auto_https off" not in rendered
+    assert ":{$CADDY_PORT}" not in rendered
+
+
+def test_ensure_runtime_auto_tls_without_public_host_fails_fast(settings):
+    with pytest.raises(ValueError, match="PUBLIC_HOST"):
+        bootstrap.ensure_runtime(
+            _settings_with(settings, AUTO_TLS=True, PUBLIC_HOST="")
+        )
+
+
 def _settings_with(settings, **overrides):
     """Same settings (same DATA_DIR/tmp DB), field-level overrides only."""
     kwargs = settings.model_dump()
