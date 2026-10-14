@@ -17,6 +17,12 @@ one-command installer on your own VPS.
   probe before it goes live, with automatic rollback if the swap fails.
   Users are auto-assigned to an inbound; links are built from the inbound's
   own port and settings.
+- **Inbound editor UI** at `/inbounds` — manage inbounds from the browser,
+  no curl needed: create, edit, enable/disable (with a losing-access
+  warning), delete. The structured form covers protocol × transport ×
+  security, the REALITY public key is shown read-only for client setup,
+  a raw-JSON section exposes every setting, and ports outside the
+  pre-opened set come with the exact `ufw` hint.
 - **Subscription URL** — every user gets `/sub/<token>`: a rate-limited,
   `no-store`, base64 link list importable by any client that speaks
   subscriptions.
@@ -30,8 +36,8 @@ one-command installer on your own VPS.
 ## Screenshots
 
 Captured against a local instance with obviously fake demo users. They
-predate the v0.2 inbound engine — the UI overhaul (inbound editor included)
-is sub-project B of the roadmap and will re-capture them.
+predate the v0.2 inbound engine and the inbound editor — the full UI
+overhaul (sub-project B of the roadmap) will re-capture them.
 
 **Sign in** — the admin login at `/`:
 

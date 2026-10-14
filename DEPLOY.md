@@ -115,6 +115,10 @@ Requires Linux — the `vps` service uses host networking (see Topology).
       (address = your domain: the inbound's port, `sni`/`pbk` = the REALITY
       target and public key);
 - [ ] import that link in a client (v2rayNG, Clash/mihomo, Happ…) and browse;
+- [ ] open `https://<domain>:8080/inbounds` (default admin/admin — change
+      it) and add or adjust inbounds from the UI; the panel warns when a
+      port needs `ufw allow <port>/tcp`. The curl API remains as the
+      scriptable reference;
 - [ ] **Upgrading from v0.1?** the old `/ray-<token>` paths no longer exist —
       old links are dead. Re-import **once**: the user's `/account` page, or
       `https://<domain>:8080/sub/<subscription-token>` in any client that
