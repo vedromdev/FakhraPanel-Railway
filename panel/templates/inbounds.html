@@ -21,6 +21,7 @@
   </div>
 
   <p id="save-notice" class="alert alert-success" hidden></p>
+  <p id="list-error" class="alert alert-error" role="alert" hidden></p>
 
   <section class="instances-list">
     <div class="instances-grid" id="inbounds-list">
@@ -104,8 +105,9 @@
   };
   var TRANSPORT_KEYS = { ws: ["path", "host"], grpc: ["serviceName"], xhttp: ["path", "mode"] };
   var TLS_KEYS = ["cert_file", "key_file"];
-  var REALITY_KEYS = ["dest", "server_names", "short_ids", "fp", "flow",
-                      "private_key", "public_key", "spiderX"];
+  // private_key/public_key are NEVER pruned: losing them silently
+  // regenerates the keypair server-side and breaks every client config.
+  var REALITY_KEYS = ["dest", "server_names", "short_ids", "fp", "flow", "spiderX"];
 
   // single source of truth for the settings object; reset fully on close so
   // unknown keys from inbound A never leak into inbound B's payload.
@@ -475,13 +477,17 @@
       var pageNotice = document.getElementById("save-notice");
       pageNotice.textContent = text;
       pageNotice.hidden = false;
-      return refresh();
+      return refresh().catch(function (error) {
+        showError(document.getElementById("list-error"),
+          "Saved, but the list failed to reload: " + error.message);
+      });
     }).catch(function (error) {
       // saved:false (422) is the OPPOSITE of the users-API 500 semantics:
       // the five gates reverted everything, so say so plainly.
       showError(formError, error.saved === false
         ? "Nothing was saved — xray rejected the config: " + error.message
         : error.message);
+      refresh().catch(function () {}); // keep the list truthful after a stale-row 404
     });
   }
 
@@ -516,6 +522,7 @@
           error.saved === false
             ? "Nothing was saved — xray rejected the config: " + error.message
             : error.message);
+        refresh().catch(function () {}); // stale-row races: keep the list truthful
       });
   }
 
@@ -528,6 +535,7 @@
       .then(function () { return refresh(); })
       .catch(function (error) {
         showError(card.querySelector("[data-error-for]"), error.message);
+        refresh().catch(function () {}); // stale-row races: keep the list truthful
       });
   }
 
@@ -587,7 +595,7 @@
   });
 
   refresh().catch(function (error) {
-    showError(document.getElementById("list-error") || formError,
+    showError(document.getElementById("list-error"),
       "Could not load inbounds: " + error.message);
   });
 })();

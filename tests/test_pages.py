@@ -218,3 +218,18 @@ def test_inbounds_js_advanced_json_contract(settings):
         html = client.get("/inbounds").text
         assert "applyJson" in html
         assert "Invalid JSON" in html
+
+
+def test_inbounds_js_failure_paths_resync_list(settings):
+    """Final-review fix pass: every failure path re-syncs the list (stale-row
+    races per plan Review Focus 5), a page-level #list-error slot exists for
+    load failures, and the REALITY keypair is never pruned (pruning it
+    silently regenerates the keypair server-side and breaks every client)."""
+    with TestClient(create_app(settings)) as client:
+        client.app.state.manager = FakeManager()
+        _login(client, settings)
+        html = client.get("/inbounds").text
+        assert 'id="list-error"' in html
+        # the three failure-path catches minimum re-sync after showing errors
+        assert html.count("refresh().catch(") >= 3
+        assert "NEVER pruned" in html
