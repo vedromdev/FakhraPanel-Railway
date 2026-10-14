@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from panel import bootstrap, db, jobs
 from panel.config import Settings
 from panel.ratelimit import RateLimiter
+from panel.routes_account import router as account_router
 from panel.routes_admin import health_router, router as admin_router
 from panel.routes_auth import router as auth_router
 from panel.routes_pages import router as pages_router
@@ -88,6 +89,7 @@ def create_app(settings: Settings) -> FastAPI:
         name="static",
     )
     app.include_router(auth_router)
+    app.include_router(account_router)
     app.include_router(pages_router)
     app.include_router(admin_router)
     app.include_router(health_router)

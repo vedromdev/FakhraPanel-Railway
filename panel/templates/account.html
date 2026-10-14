@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/style.css">
+{% endblock %}
+
+{% block content %}
+<div class="container">
+  <div class="header">
+    <h1>{{ title }}</h1>
+    <p class="card-small">Signed in as <strong>{{ user.username }}</strong></p>
+    <div class="user-info">
+      <a class="btn btn-sm btn-secondary" href="/account/logout">Log out</a>
+    </div>
+  </div>
+
+  <section class="instances-list">
+    <h2>Your connection</h2>
+    <div class="instance-card">
+      <div class="card-header {{ 'active' if user.status == 'active' else 'inactive' }}">
+        <span class="status-dot"></span>
+        <strong>{{ user.username }}</strong>
+        <span class="card-small">{{ user.protocol }}</span>
+        <span class="card-small" data-status="{{ user.status }}">{{ user.status }}</span>
+      </div>
+      <div class="card-body">
+        <div class="qr-code">
+          <img src="{{ qr }}" alt="QR code for the share link">
+        </div>
+        <label for="link-uri">Share link</label>
+        <input id="link-uri" class="share-uri" type="text" value="{{ link }}" readonly>
+        {% if user.quota_gb %}
+        {% set used_pct = ([100, (user.used_bytes or 0) / (user.quota_gb * 1e9) * 100] | min) | round %}
+        <div class="usage-bar" data-usage="{{ '%.2f' | format((user.used_bytes or 0) / 1e9) }}"><div class="usage-fill" style="width: {{ used_pct }}%"></div></div>
+        <p class="card-small">{{ '%.2f' | format((user.used_bytes or 0) / 1e9) }} GB / {{ user.quota_gb }} GB</p>
+        {% else %}
+        <p class="card-small" data-usage="{{ '%.2f' | format((user.used_bytes or 0) / 1e9) }}">{{ '%.2f' | format((user.used_bytes or 0) / 1e9) }} GB used</p>
+        {% endif %}
+        <p class="card-small">Expires: {{ user.expires_at[:10] if user.expires_at else 'never' }}</p>
+      </div>
+    </div>
+  </section>
+</div>
+{% endblock %}
