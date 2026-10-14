@@ -372,6 +372,18 @@ def get_user(user_id: str) -> dict | None:
         conn.close()
 
 
+def get_user_by_sub_token(token: str) -> dict | None:
+    """The user behind a /sub/{token} credential (sub_token has a unique index)."""
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT * FROM users WHERE sub_token = ?", (token,)
+        ).fetchone()
+        return dict(row) if row is not None else None
+    finally:
+        conn.close()
+
+
 def update_user(user_id: str, fields: dict) -> dict | None:
     if not fields:
         return None

@@ -17,6 +17,7 @@ from panel.routes_admin import health_router, router as admin_router
 from panel.routes_auth import router as auth_router
 from panel.routes_inbounds import router as inbounds_router
 from panel.routes_pages import router as pages_router
+from panel.routes_sub import router as sub_router
 from panel.xray.manager import XrayManager
 from panel.xray.stats import StatsClient
 
@@ -49,6 +50,9 @@ def create_app(settings: Settings) -> FastAPI:
             )
         app.state.settings = settings
         app.state.rate = RateLimiter()
+        # /sub/{token} pulls: 30 per 5 min per client — long-lived interval
+        # clients re-fetch at human-ish cadences; scrapers get nowhere.
+        app.state.sub_rate = RateLimiter(window_s=300, max_calls=30)
         manager = XrayManager(
             settings,
             public_host=settings.PUBLIC_HOST,
@@ -98,5 +102,6 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(pages_router)
     app.include_router(admin_router)
     app.include_router(inbounds_router)
+    app.include_router(sub_router)
     app.include_router(health_router)
     return app

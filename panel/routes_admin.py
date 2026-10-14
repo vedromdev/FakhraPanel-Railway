@@ -138,6 +138,7 @@ def _new_row(
         "note": note,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "inbound_id": inbound_id,
+        "sub_token": uuid.uuid4().hex,  # /sub/{token} credential (Task 8)
     }
 
 

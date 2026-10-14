@@ -779,3 +779,14 @@ def _first_user_uuid(client, inbound_id: str) -> str:
     resp = _create(client, inbound_id=inbound_id)
     assert resp.status_code == 201, resp.text
     return resp.json()["user"]["uuid"]
+
+
+def test_new_users_get_sub_token(auth_client):
+    first = _create(auth_client, username="tokone").json()["user"]
+    second = _create(auth_client, username="toktwo").json()["user"]
+
+    for user in (first, second):
+        token = user["sub_token"]
+        assert len(token) == 32
+        int(token, 16)  # 32 hex chars
+    assert first["sub_token"] != second["sub_token"]
