@@ -11,7 +11,7 @@ import pytest
 
 from panel import db
 from panel.constants import DEFAULT_SS_METHOD
-from panel.paths import PORTS, vpn_path
+from panel.paths import PORTS
 from panel.xray import keys
 from panel.xray.config_builder import build_config, write_config
 
@@ -84,10 +84,6 @@ def _find_xray() -> str | None:
 
 
 XRAY_BIN = _find_xray()
-
-
-def test_vpn_path_format():
-    assert vpn_path("abc123", "vless") == "/ray-abc123/vless"
 
 
 def test_disabled_inbound_excluded():

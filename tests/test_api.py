@@ -104,7 +104,8 @@ def test_create_vless_user_returns_link_and_qr(auth_client):
     assert response.status_code == 201
     body = response.json()
     assert ":443" in body["link"]
-    assert "security=tls" in body["link"]
+    assert "security=reality" in body["link"]  # vless seed is REALITY on 443
+    assert "pbk=" in body["link"] and "flow=xtls-rprx-vision" in body["link"]
     assert body["qr"].startswith("data:image/png")
     assert body["user"]["uuid"]
 

@@ -158,9 +158,16 @@ def _get_or_404(user_id: str) -> dict:
     return user
 
 
+def _inbound_or_404(user: dict) -> dict:
+    """The inbound this user's link derives from; 409 when dangling."""
+    inbound = db.get_inbound(user.get("inbound_id"))
+    if inbound is None:
+        raise HTTPException(status_code=409, detail="user has no inbound")
+    return inbound
+
+
 def _link_and_qr(user: dict, public_host: str) -> tuple[str, str]:
-    install_token = db.read_meta("install_token")  # seeded by ensure_runtime
-    link = links.build_link(user, public_host, install_token)
+    link = links.build_link(user, _inbound_or_404(user), public_host)
     return link, links.build_qr_data_uri(link)
 
 
@@ -246,8 +253,10 @@ def bulk_create_users(body: UserBulk, request: Request):
         return rejected
 
     public_host = request.app.state.settings.PUBLIC_HOST
-    install_token = db.read_meta("install_token")
-    built = [links.build_link(user, public_host, install_token) for user in users]
+    built = [
+        links.build_link(user, _inbound_or_404(user), public_host)
+        for user in users
+    ]
     return {"users": users, "links": built}
 
 

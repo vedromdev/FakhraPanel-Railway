@@ -71,7 +71,10 @@ def _account_page(request: Request, session: dict) -> HTMLResponse:
     if user is None:  # deleted since login: the session is worthless
         return _login_page(request)
     settings = request.app.state.settings
-    link = links.build_link(user, settings.PUBLIC_HOST, db.read_meta("install_token"))
+    inbound = db.get_inbound(user.get("inbound_id"))
+    if inbound is None:  # dangling assignment: no link may silently lie
+        raise HTTPException(status_code=409, detail="user has no inbound")
+    link = links.build_link(user, inbound, settings.PUBLIC_HOST)
     # Exactly one context row (the brief's context rule): the caller's own,
     # carrying a computed status; the bcrypt hash is never referenced.
     user = {**user, "status": _status(user)}
