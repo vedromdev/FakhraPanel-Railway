@@ -315,6 +315,20 @@ def test_panel_via_caddy_and_vpn_on_direct_port(stack):
 
 @pytest.mark.integration
 @requires_container
+def test_ray_paths_404_through_caddy(stack):
+    """The old /ray-<token>/<proto> namespace is gone (A2): caddy hands
+    every path to the panel, which has no ray routes → 404. Never a proxy
+    to xray — its ports are bound directly, caddy doesn't know them."""
+    client = httpx2.Client(
+        base_url=f"http://127.0.0.1:{stack.caddy_port}", timeout=10.0
+    )
+    for path in ("/ray-anything/vless", "/ray-deadbeef/vmess"):
+        response = client.get(path)
+        assert response.status_code == 404, (path, response.status_code)
+
+
+@pytest.mark.integration
+@requires_container
 def test_real_config_passes_real_xray(stack):
     """A user created through the live API ends up in a config the real
     `xray run -test` accepts (the manager already tested it; re-prove here)."""

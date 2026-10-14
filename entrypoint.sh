@@ -28,6 +28,11 @@ if [ -z "${DATA_DIR:-}" ]; then
 fi
 export DATA_DIR
 
+# Caddy storage on the volume: without this, LE certs (and account keys)
+# live in the container's ephemeral home and every redeploy re-issues —
+# duplicate-cert rate limits (5/week) would lock you out after a few.
+export XDG_DATA_HOME="${DATA_DIR}/caddy"
+
 # AUTO_TLS mode: caddy owns :80 (LE HTTP-01 + redirect) and the
 # {$PUBLIC_HOST}:8080 panel site. It binds the PUBLIC_HOST address, not
 # loopback, so readiness must probe that host:port — and wait out Let's

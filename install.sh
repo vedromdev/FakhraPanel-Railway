@@ -69,12 +69,13 @@ else
 fi
 
 # --- 4. Firewall (ufw only; other firewalls must be opened by hand) ----------
-# 80 = LE HTTP-01, 443 = xray REALITY, 8080 = panel HTTPS. Every VPN inbound
-# you create later needs its own port opened too (the panel prints the ufw
-# line as a hint when a non-pre-opened port is used).
+# 80 = LE HTTP-01, 443 = xray REALITY, 8080 = panel HTTPS, 10002-10004 = the
+# seeded vmess/trojan/ss inbounds. Every inbound port you create later needs
+# its own rule too (the panel prints the ufw line as a hint when a
+# non-pre-opened port is used).
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
-  ufw allow 80/tcp >/dev/null && ufw allow 443/tcp >/dev/null && ufw allow 8080/tcp >/dev/null
-  say "ufw: opened 80/tcp (LE), 443/tcp (REALITY), 8080/tcp (panel)"
+  for _p in 80 443 8080 10002 10003 10004; do ufw allow "${_p}/tcp" >/dev/null; done
+  say "ufw: opened 80/443/8080 (LE, panel) + 10002-10004 (seed inbounds)"
 else
   warn "ufw is not active — open 80/443/8080 (and every inbound port you create) in your firewall by hand"
 fi
