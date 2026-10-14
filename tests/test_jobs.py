@@ -8,6 +8,14 @@ from datetime import datetime, timezone
 import pytest
 from fastapi.testclient import TestClient
 
+# Guard BEFORE the panel imports (panel.jobs and panel.app pull in
+# panel.xray.stats, which imports the pb stubs): a fresh checkout without
+# generated stubs must skip with an actionable reason, not die at collection.
+pytest.importorskip(
+    "panel.xray.pb.command_pb2",
+    reason="generated stubs missing — run: bash scripts/gen_protos.sh",
+)
+
 from panel import db, jobs
 from panel.app import create_app
 from panel.config import Settings

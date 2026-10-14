@@ -21,6 +21,14 @@ from pathlib import Path
 import httpx2
 import pytest
 
+# Guard BEFORE importing panel.xray.stats (stats.py imports the pb stubs):
+# a fresh checkout without generated stubs must skip with an actionable
+# reason, not die with a raw ImportError at collection.
+pytest.importorskip(
+    "panel.xray.pb.command_pb2",
+    reason="generated stubs missing — run: bash scripts/gen_protos.sh",
+)
+
 from panel import bootstrap, db
 from panel.caddy import render_caddyfile
 from panel.config import Settings
@@ -423,3 +431,136 @@ def test_user_traffic_counts_real_bytes(stack):
     )
     # provenance for the report: the real counter value this run observed
     print(f"observed per-user counter: {total} bytes")
+
+
+# --- entrypoint lifecycle: runs anywhere (bash + python, fake caddy) -------
+
+
+# A stand-in caddy: "die" exits at startup, "serve" answers on CADDY_PORT,
+# "serve-then-die" exits 2 s after binding (an OOM-style mid-run death).
+_FAKE_CADDY = """\
+import http.server
+import os
+import socketserver
+import sys
+import threading
+
+mode = os.environ.get("FAKE_CADDY_MODE", "serve")
+if mode == "die":
+    sys.stderr.write("fake caddy: dying immediately\\n")
+    sys.exit(1)
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"ok")
+
+    def log_message(self, *args):
+        pass
+
+
+server = socketserver.TCPServer(
+    ("127.0.0.1", int(os.environ["CADDY_PORT"])), Handler
+)
+if mode == "serve-then-die":
+    threading.Timer(2.0, lambda: os._exit(1)).start()
+server.serve_forever()
+"""
+
+
+def _entrypoint_env(tmp_path, panel_port: int, caddy_port: int,
+                    caddy_mode: str) -> dict:
+    """Env for a real entrypoint.sh run with a fake caddy first on PATH."""
+    bin_dir = tmp_path / "fake-bin"
+    bin_dir.mkdir(exist_ok=True)
+    # A sh wrapper, not a shebang: the repo path (and venv inside it) may
+    # contain spaces, which shebang lines cannot express.
+    (bin_dir / "fake_caddy.py").write_text(_FAKE_CADDY)
+    shim = bin_dir / "caddy"
+    shim.write_text(
+        f'#!/bin/sh\nexec "{sys.executable}" "{bin_dir}/fake_caddy.py" "$@"\n'
+    )
+    shim.chmod(0o755)
+    return {
+        **os.environ,
+        "PATH": (f"{bin_dir}:{Path(sys.executable).parent}:"
+                 f"{os.environ['PATH']}"),
+        "DATA_DIR": str(tmp_path / "data"),
+        "PANEL_PORT": str(panel_port),
+        "CADDY_PORT": str(caddy_port),
+        "ADMIN_USERNAME": "admin",
+        "ADMIN_PASSWORD": "entrypoint-test-123",
+        "PUBLIC_HOST": "localhost",
+        "COOKIE_SECURE": "0",
+        "ENV": "test",
+        "XRAY_BIN": os.environ.get("XRAY_BIN", "xray"),
+        "FAKE_CADDY_MODE": caddy_mode,
+    }
+
+
+def _wait_for_port_dead(port: int, timeout_s: float = 5) -> bool:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                pass
+        except OSError:
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def test_entrypoint_fails_fast_when_caddy_dies_at_startup(tmp_path):
+    """A caddy that dies at startup (bad config, port in use) must fail the
+    container — never leave a panel-only container that looks healthy."""
+    env = _entrypoint_env(tmp_path, _free_port(), _free_port(), "die")
+    result = subprocess.run(
+        ["bash", str(REPO_ROOT / "entrypoint.sh")],
+        cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=25,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "caddy not listening" in result.stderr
+    assert _wait_for_port_dead(int(env["PANEL_PORT"])), (
+        "orphan panel still listening after entrypoint exit"
+    )
+
+
+def test_entrypoint_tears_down_when_caddy_dies_at_runtime(tmp_path):
+    """Mid-run caddy death (OOM-style) must also tear the container down:
+    whichever child dies first ends the container with a non-zero code."""
+    env = _entrypoint_env(
+        tmp_path, _free_port(), _free_port(), "serve-then-die"
+    )
+    result = subprocess.run(
+        ["bash", str(REPO_ROOT / "entrypoint.sh")],
+        cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert _wait_for_port_dead(int(env["PANEL_PORT"])), (
+        "orphan panel still listening after entrypoint exit"
+    )
+
+
+def test_entrypoint_sigterm_stops_cleanly_with_exit_143(tmp_path):
+    """SIGTERM (the Railway stop) still stops everything promptly: the
+    entrypoint exits 143 and neither child is left listening."""
+    panel_port, caddy_port = _free_port(), _free_port()
+    env = _entrypoint_env(tmp_path, panel_port, caddy_port, "serve")
+    proc = subprocess.Popen(
+        ["bash", str(REPO_ROOT / "entrypoint.sh")],
+        cwd=REPO_ROOT, env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    try:
+        assert _wait_for_port(caddy_port, timeout_s=20), "caddy never up"
+        proc.terminate()  # SIGTERM, as Railway sends to PID 1
+        stdout, _ = proc.communicate(timeout=10)
+        assert proc.returncode == 143, stdout
+        assert _wait_for_port_dead(panel_port), "orphan panel still listening"
+        assert _wait_for_port_dead(caddy_port), "orphan caddy still listening"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.communicate()
