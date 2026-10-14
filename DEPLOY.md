@@ -11,8 +11,61 @@
 
 ## Option A — your own VPS (recommended)
 
-Ubuntu/Debian with a **domain whose A record points at the server** (ports
-80/443 reachable — they're needed for the Let's Encrypt HTTP-01 challenge).
+Ubuntu/Debian with a **domain whose A record points at the server** — the
+A record drives Let's Encrypt (HTTP-01 on :80), and the panel lives at
+`https://<domain>:8080`.
+
+### Topology & ports (v0.2)
+
+```
+Internet
+ ├── :443        Xray — VLESS + REALITY inbound (seed default; does its own TLS)
+ ├── :<port>…    Xray — other inbounds: seeds 10002–10004, plus any you create
+ ├── :8080       Caddy — panel, API, /sub (HTTPS, LE cert for PUBLIC_HOST)
+ └── :80         Caddy — ACME HTTP-01 + HTTP→HTTPS redirect → :8080
+```
+
+| Port | Owner | Purpose |
+|---|---|---|
+| `80/tcp` | Caddy | Let's Encrypt HTTP-01 + redirect to the panel |
+| `443/tcp` | Xray | VLESS + REALITY inbound (seeded default) |
+| `8080/tcp` | Caddy | Admin panel, API, `/sub/<token>` (HTTPS) |
+| `10002/tcp` | Xray | VMess seed (WebSocket) |
+| `10003/tcp` | Xray | Trojan seed — **no TLS, see caveats below** |
+| `10004/tcp` | Xray | Shadowsocks seed |
+| *any port you pick* | Xray | inbounds you create — **you must allow it by hand** |
+
+- The `vps` service runs with `network_mode: host`: Xray binds these ports
+  **directly on the host** (no compose edit needed when you add an inbound).
+  Consequence: **`vps` is Linux-VPS-only** — on a Mac use the `panel`
+  service for the dashboard; its inbounds are reachable inside the container
+  and can be published ad hoc (`ports:` entries) for phone testing.
+- `install.sh` opens `80/443/8080/10002–10004` in ufw when it's active.
+  **Every inbound port beyond those needs its own rule:**
+  `sudo ufw allow <port>/tcp` (the create-inbound API response carries a
+  `firewall_hint` with the exact line).
+- Xray's stats API stays loopback-only (`10010`); the panel backend listens
+  on loopback `8000` behind Caddy.
+
+**Caveats, stated honestly:**
+
+- **REALITY target.** The seeded REALITY inbound forwards its TLS handshake
+  to `www.apple.com:443` — editable per inbound (`dest` + `server_names`).
+  It was changed from the classic `www.microsoft.com:443` because xray
+  ≥ 26.3.27 rejects Microsoft's certificate record (it exceeds 8192 bytes —
+  XTLS/Xray-core#6356); `www.apple.com` was verified with a real client
+  connect end-to-end. Pick a target that is **fast and reachable from both
+  your VPS and your clients** — apple/Google domains have a long history of
+  interference in some regions (GFW-style SNI routing), so the shipped
+  default may not be the best choice where you are. After changing it,
+  **verify with a real client connect**: a passing config save cannot prove
+  a target works for your clients.
+- **The Trojan seed runs without TLS** (`security: none` — Trojan's
+  password over plain TCP is trivially identifiable and blockable). Fix it
+  by setting the inbound's `security` to `tls` with `cert_file`/`key_file`
+  pointing at a PEM pair (e.g. a cert for your domain), use
+  `stream_settings_extra` for a raw stream-settings override — or simply
+  **move those users to the REALITY inbound**, the recommended default.
 
 ### A1. One-command install
 
@@ -30,13 +83,15 @@ The installer:
    (`ADMIN_USERNAME=... ADMIN_PASSWORD=... PUBLIC_HOST=... sudo -E bash
    install.sh`) for non-interactive runs. Writes `.env` with `AUTO_TLS=true`
    (an existing `.env` is never overwritten);
-3. opens 80/443 in ufw when it's active;
+3. opens `80/443/8080` plus the seed VPN ports `10002–10004` in ufw when
+   it's active (inbounds you create later: `sudo ufw allow <port>/tcp`);
 4. enables **BBR + tuned TCP buffers** via `/etc/sysctl.d/99-fakhra-panel.conf`
    (skipped with a warning if the kernel lacks BBR);
-5. `docker compose up -d --build vps` — Caddy obtains a Let's Encrypt cert
-   for your domain and serves HTTPS;
-6. polls `https://<domain>/api/health` for up to 2 minutes, then prints the
-   login URL (LE issuance usually takes 10–30 s).
+5. `docker compose up -d --build vps` — host networking: Xray binds your
+   VPN ports directly, and Caddy obtains a Let's Encrypt cert and serves
+   the panel on `:8080` (certs persist on the `./data` volume);
+6. polls `https://<domain>:8080/api/health` for up to 2 minutes, then prints
+   the login URL (LE issuance usually takes 10–30 s).
 
 ### A2. Manual install (same result, step by step)
 
@@ -47,16 +102,23 @@ docker compose up -d --build vps
 ```
 
 Equivalent firewall/sysctl setup as in A1 if you're not using the script.
+Requires Linux — the `vps` service uses host networking (see Topology).
 
 ### A3. Verify (first-deploy checklist)
 
-- [ ] `curl -s https://<domain>/api/health` →
+- [ ] `curl -s https://<domain>:8080/api/health` →
       `{"status":"ok","xray":{"running":true,...}}`
-- [ ] `https://<domain>/` shows the login page with a **valid cert**
+- [ ] `https://<domain>:8080/` shows the login page with a **valid cert**
       (no browser warning);
 - [ ] log in → create a user → open **View** → the link starts
-      `vless://...@<domain>:443?...&security=tls&sni=<domain>`;
+      `vless://…@<domain>:443?…&security=reality&sni=www.apple.com&pbk=…`
+      (address = your domain: the inbound's port, `sni`/`pbk` = the REALITY
+      target and public key);
 - [ ] import that link in a client (v2rayNG, Clash/mihomo, Happ…) and browse;
+- [ ] **Upgrading from v0.1?** the old `/ray-<token>` paths no longer exist —
+      old links are dead. Re-import **once**: the user's `/account` page, or
+      `https://<domain>:8080/sub/<subscription-token>` in any client that
+      accepts a subscription URL;
 - [ ] `sysctl net.ipv4.tcp_congestion_control` → `bbr`.
 
 **Do not run the `panel` and `vps` services at the same time** — they share
@@ -65,10 +127,11 @@ uses `vps`.
 
 ### Why AUTO_TLS matters
 
-With `AUTO_TLS=true` Caddy owns :80 (ACME + redirect) and :443 (site), so
-end-to-end TLS exists **on your machine** — the VPN's WebSocket traffic is
-encrypted all the way to you, and probes to the domain see a normal HTTPS
-website. On PaaS (Option B) TLS terminates at the provider's edge instead.
+With `AUTO_TLS=true` Caddy owns :80 (ACME + redirect) and serves the panel
+at `https://<domain>:8080` with a Let's Encrypt cert; :443 belongs to
+Xray's REALITY inbound, which does its own TLS — a probe of :443 receives a
+faithful replica of the REALITY target's handshake, not your panel. On PaaS
+(Option B) TLS terminates at the provider's edge instead.
 
 ## Option B — Railway-style PaaS (reference)
 
@@ -76,6 +139,13 @@ website. On PaaS (Option B) TLS terminates at the provider's edge instead.
 > PaaS providers may too. This section is kept as a walkthrough for providers
 > that accept it (or your own edge setup) — it is **not** a record of a
 > currently-working Railway deploy.
+>
+> **Honest casualty (v0.2): single-port PaaS hosts carry the panel only.**
+> Xray now owns its VPN ports directly, and a one-port host can't expose
+> them — the old `/ray-<token>` multiplexing that let one port serve both
+> dashboard and VPN is gone. On PaaS the dashboard, user management, and
+> `/sub` all work, but **VPN traffic cannot flow**. For a working VPN use a
+> VPS (Option A); use PaaS only to poke at the panel.
 
 ### B1. Create the service
 
@@ -119,15 +189,17 @@ Service → **Settings → Volumes → Add Volume**, mount path exactly:
 ```
 
 The free plan includes a **0.5 GB** volume — enough for the SQLite DB, the
-Xray config, and the install token. Without a volume, every redeploy starts
-from an empty database (all users gone).
+Xray config, and the Let's Encrypt certs (`XDG_DATA_HOME=/data/caddy`).
+Without a volume, every redeploy starts from an empty database (all users
+gone) and re-issues the cert (LE duplicate-cert rate limits: 5/week).
 
 ### B4. Get the public hostname
 
 Service → **Settings → Networking → Generate Domain** → you get a free
 `*.railway.app` hostname. Copy it into the `PUBLIC_HOST` variable (step B2)
-and restart the service. Share links always point at `<PUBLIC_HOST>:443` with
-`sni=<PUBLIC_HOST>` — Railway's edge terminates TLS there.
+and restart the service. `PUBLIC_HOST` becomes the address in generated
+links — but on single-port PaaS the inbound ports aren't exposed (warning
+above), so links generated here won't carry traffic.
 
 ### B5. Healthcheck & restart policy
 
@@ -173,7 +245,9 @@ unless your service already has Config as Code enabled.
 Run against the deployed service. (Most dashboard/API items also work against
 the local Docker stack from `docker compose up panel`; for the client-connect
 step, set `PUBLIC_HOST` to an address your client device can actually reach —
-`localhost` links only work on the same machine.)
+`localhost` links only work on the same machine, and the local `panel`
+service publishes only `8080`, so add a `ports:` mapping for the inbound
+you're testing (e.g. `"443:443"`) first.)
 
 - [ ] **Dashboard loads** → login with the admin credentials works.
 - [ ] **Create a user** (single-create form: protocol, expiry, quota, note) →
@@ -226,23 +300,36 @@ step, set `PUBLIC_HOST` to an address your client device can actually reach —
 
 ## What was actually verified in this repo
 
-- `python3 -m pytest tests/ -v` → **134 passed, 5 skipped** (5 skips are the
-  Docker-only integration tests) — includes the AUTO_TLS Caddyfile rendering
-  and default-credential tests.
+- `python3 -m pytest tests/ -q` → **198 passed, 8 skipped** — all 8 skips
+  are container-only integration tests (they run in the gate below; when the
+  suite runs *inside* the container, none skip). Includes the two-mode
+  Caddyfile rendering, the REALITY/x25519/link-matrix units, and
+  default-credential tests.
 - `docker compose build test && docker compose run --rm test` →
-  **139 passed** (real Caddy + panel + real Xray: WS `101` upgrade on
-  `/ray-<token>/<proto>`, one port serving both dashboard and VPN, real
-  `xray run -test`, gRPC stats roundtrip with real traffic bytes).
-- Local container smoke checks (`docker compose up panel`):
-  `GET /login` → 200, `GET /` → 302, `GET /ray-<wrong>/vless` → 404,
-  `GET /api/health` → 200 `{"status":"ok","xray":{"running":true,…}}`.
-- Failure drill (failure drills section) run locally: after the `/proc` kill,
-  `/api/health` → `{"status":"degraded","xray":{"running":false,…}}`, then
-  `ok` again ~5 s later (backoff restart worked).
+  **206 passed, 0 skipped** (real Caddy + panel + real Xray): WS `101`
+  upgrade directly on the vmess seed's own port, a full **REALITY client
+  connect through :443** with tunneled traffic reaching an echo server, a
+  freshly created REALITY inbound serving traffic, **old `/ray-<token>`
+  paths → 404 through Caddy**, entrypoint supervision (caddy dies →
+  teardown; SIGTERM → 143, no orphaned children), `xray run -test` gating,
+  and a gRPC stats roundtrip with real traffic bytes.
+- Local container smoke checks (`docker compose up panel`, re-run after the
+  v0.2 topology move): `GET /login` → 200, `GET /` → 302,
+  `GET /ray-nope/vless` → 404, `GET /api/health` → 200
+  `{"status":"ok","xray":{"running":true,…}}`.
+- Failure drill (failure drills section) re-run against the same stack:
+  after the `/proc` kill, `/api/health` →
+  `{"status":"degraded","xray":{"running":false,…}}`, then `ok` again
+  within seconds (backoff restart worked).
 - `install.sh` / `entrypoint.sh` → `bash -n` clean; `docker compose config`
-  parses with the profile-gated `vps` service (default profile starts only
-  `panel` + `test`).
+  parses (default profile starts only `panel` + `test`; `--profile vps`
+  includes `vps` with `network_mode: host`).
+- Both rendered Caddyfile modes validated by **real caddy** in the test
+  image (`caddy validate … --adapter caddyfile` → `Valid configuration`):
+  plain (`:{$CADDY_PORT}`, `auto_https off`) and auto-TLS
+  (`{$PUBLIC_HOST}:8080`, automatic HTTPS on).
 
 Not verified here: the live Let's Encrypt issuance and the VPS checklist in
-Option A — run those on your server — and anything on Railway itself (see the
-warning at the top of Option B).
+Option A — run those on your server; connect tests from real third-party
+client apps (the gate's e2e uses Xray itself as the client); anything on
+Railway itself (see the warning at the top of Option B).
