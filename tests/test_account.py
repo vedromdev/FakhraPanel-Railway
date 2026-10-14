@@ -6,11 +6,14 @@ routes — a user cookie never reaches the admin API, and an admin cookie never
 opens the account page.
 """
 
+import logging
+
 import pytest
 from fastapi.testclient import TestClient
 
 from panel import db
 from panel.app import create_app
+from panel.config import Settings
 from panel.ratelimit import RateLimiter
 
 
@@ -223,3 +226,97 @@ def test_account_page_shows_computed_status(client, settings):
     )
     limited = client.get("/account")
     assert 'data-status="limited"' in limited.text
+
+
+# --- review fixes: per-surface rate-limit budgets ----------------------------
+
+
+def test_account_login_budget_does_not_lock_out_admin_login(client, settings):
+    """(Review Important 1) Exhausting the user-login budget from one IP must
+    not deny the operator's admin login: the two surfaces have separate
+    per-IP budgets, while each stays throttled at 5/60s."""
+    _admin_login(client, settings)
+    created = _create_user(client, "alice")
+    client.cookies.clear()
+    client.app.state.rate = RateLimiter()  # setup consumed hits; fresh budget
+
+    for _ in range(5):
+        assert _user_login(client, "alice", "wrong-pass").status_code == 200
+    assert _user_login(client, "alice", "wrong-pass").status_code == 429
+
+    admin = client.post(
+        "/login",
+        data={
+            "username": settings.ADMIN_USERNAME,
+            "password": settings.ADMIN_PASSWORD,
+        },
+        follow_redirects=False,
+    )
+    assert admin.status_code == 302  # admin budget untouched by account fails
+
+
+def test_admin_login_budget_does_not_lock_out_account_login(client, settings):
+    """(Review Important 1) The symmetric direction: exhausted admin budget
+    leaves the user-login budget intact."""
+    _admin_login(client, settings)
+    created = _create_user(client, "alice")
+    client.cookies.clear()
+    client.app.state.rate = RateLimiter()  # setup consumed hits; fresh budget
+
+    for _ in range(5):
+        response = client.post(
+            "/login",
+            data={
+                "username": settings.ADMIN_USERNAME,
+                "password": "wrong-pass",
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code == 200
+    sixth = client.post(
+        "/login",
+        data={
+            "username": settings.ADMIN_USERNAME,
+            "password": "wrong-pass",
+        },
+        follow_redirects=False,
+    )
+    assert sixth.status_code == 429
+
+    user = _user_login(client, "alice", created["password"])
+    assert user.status_code == 302  # account budget untouched by admin fails
+
+
+# --- review addition: blank PUBLIC_HOST warns at startup ---------------------
+
+
+def test_blank_public_host_logs_error_at_startup(tmp_path, caplog):
+    """(Controller addition) An unset PUBLIC_HOST must be loud at boot, not
+    a healthy-looking panel that 500s on the first share link."""
+    blank = Settings(
+        ADMIN_USERNAME="admin",
+        ADMIN_PASSWORD="test-pass-123",
+        PUBLIC_HOST="",
+        DATA_DIR=str(tmp_path),
+        COOKIE_SECURE=False,
+        XRAY_BIN="xray",
+        ENV="test",
+    )
+    with caplog.at_level(logging.ERROR):
+        with TestClient(create_app(blank)):
+            pass
+
+    errors = [record for record in caplog.records if record.levelno >= logging.ERROR]
+    assert any("PUBLIC_HOST" in record.message for record in errors)
+
+
+def test_set_public_host_logs_no_startup_error(settings, caplog):
+    with caplog.at_level(logging.ERROR):
+        with TestClient(create_app(settings)):
+            pass
+
+    assert not [
+        record
+        for record in caplog.records
+        if record.levelno >= logging.ERROR and "PUBLIC_HOST" in record.message
+    ]

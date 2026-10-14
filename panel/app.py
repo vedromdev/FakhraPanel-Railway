@@ -39,6 +39,14 @@ def create_app(settings: Settings) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         bootstrap.ensure_runtime(settings)
+        if not settings.PUBLIC_HOST.strip():
+            # Fail-loud at boot (links.build_link still refuses at generation):
+            # an unset host otherwise looks healthy until the first share
+            # link or account-page request 500s.
+            logger.error(
+                "PUBLIC_HOST is empty — share links and the account page will "
+                "fail until PUBLIC_HOST is set"
+            )
         app.state.settings = settings
         app.state.rate = RateLimiter()
         manager = XrayManager(

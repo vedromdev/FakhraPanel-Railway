@@ -98,7 +98,10 @@ async def account_login(
     password: str = Form(...),
 ):
     ip = rate_limit_key(request)
-    if not request.app.state.rate.allow(ip):
+    # Namespaced key: the account surface gets its own per-IP budget so failed
+    # user logins can never lock the operator out of admin /login (and vice
+    # versa); each surface stays throttled at the RateLimiter default.
+    if not request.app.state.rate.allow(f"account-login:{ip}"):
         return _login_page(request, ERROR_RATE_LIMITED, status_code=429)
     user = _find_user(username)
     if user is None or not auth.verify_password(password, user["password"]):

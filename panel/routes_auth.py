@@ -43,7 +43,10 @@ async def login_submit(
 ):
     settings = request.app.state.settings
     ip = rate_limit_key(request)
-    if not request.app.state.rate.allow(ip):
+    # Namespaced key: admin gets its own per-IP budget, separate from the
+    # account surface's, so neither login can lock the other out (review
+    # Important 1); per-surface brute force stays throttled.
+    if not request.app.state.rate.allow(f"admin-login:{ip}"):
         return _login_page(request, ERROR_RATE_LIMITED, status_code=429)
     if not auth.authenticate_admin(username, password, settings):
         return _login_page(request, ERROR_INVALID)
