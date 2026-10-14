@@ -102,3 +102,26 @@ def test_dashboard_js_calls_api_paths(settings):
         html = response.text
         assert "/api/users" in html
         assert "/api/health" in html
+
+
+def test_dashboard_js_surfaces_bulk_conflicts(settings):
+    """api() must fall back to body.conflicts: bulk 409s carry only
+    {"conflicts": [...]} with no detail key, so detail-only error handling
+    would show the operator an opaque "Request failed (409)".
+
+    The JS isn't executed in these tests (TestClient serves HTML; no
+    browser), so this pins the served fallback logic itself — same seam as
+    test_dashboard_js_calls_api_paths.
+    """
+    with TestClient(create_app(settings)) as client:
+        client.app.state.manager = FakeManager()
+        _login(client, settings)
+
+        response = client.get("/")
+
+        assert response.status_code == 200
+        html = response.text
+        # api()'s error branch reads body.conflicts when body.detail is absent.
+        assert "body.conflicts" in html
+        # The dead indexOf("already exists") special-case is removed.
+        assert 'indexOf("already exists")' not in html

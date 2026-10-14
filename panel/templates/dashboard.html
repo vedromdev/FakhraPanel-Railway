@@ -168,7 +168,10 @@
       return response.json().catch(function () { return {}; }).then(function (body) {
         clearTimeout(timer);
         if (!response.ok) {
-          var detail = body.detail;
+          var detail = body.detail ||
+            (Array.isArray(body.conflicts) && body.conflicts.length
+              ? "already exists: " + body.conflicts.join(", ")
+              : null);
           if (Array.isArray(detail)) {
             detail = detail.map(function (item) { return item.msg || JSON.stringify(item); }).join("; ");
           }
@@ -385,11 +388,7 @@
       box.hidden = false;
       return refreshUsers();
     }).catch(function (error) {
-      if (error.message && error.message.indexOf("already exists") !== -1) {
-        showError(formError, error.message);
-      } else {
-        showError(formError, error.message + (error.saved ? " (change was saved)" : ""));
-      }
+      showError(formError, error.message + (error.saved ? " (change was saved)" : ""));
     });
   });
 
