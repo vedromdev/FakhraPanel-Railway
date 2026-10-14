@@ -26,7 +26,21 @@ def test_data_dir_falls_back_when_missing(monkeypatch):
 
 
 def test_missing_admin_password_fails_fast(monkeypatch):
+    # Hermetic: neither the ambient .env (README's own dev flow creates one)
+    # nor ambient shell env may satisfy the required fields. _env_file=None
+    # disables the model's env_file=".env"; delenv removes the shell vars.
+    monkeypatch.delenv("ADMIN_USERNAME", raising=False)
     monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
     with pytest.raises(ValidationError) as excinfo:
-        Settings()
+        Settings(_env_file=None)
     assert "ADMIN_PASSWORD" in str(excinfo.value)
+
+
+def test_missing_admin_username_fails_fast(monkeypatch):
+    # Same hermetic guard for the other required field (spec §8: both are
+    # required; the panel must fail fast on either).
+    monkeypatch.delenv("ADMIN_USERNAME", raising=False)
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    with pytest.raises(ValidationError) as excinfo:
+        Settings(_env_file=None)
+    assert "ADMIN_USERNAME" in str(excinfo.value)
