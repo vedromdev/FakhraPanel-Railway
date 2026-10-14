@@ -247,8 +247,8 @@ def test_migrate_seeds_default_inbounds(settings):
     assert vless["transport"] == "tcp"
     assert len(vless["private_key"]) >= 40
     assert len(vless["public_key"]) >= 40
-    assert vless["server_names"] == ["www.microsoft.com"]
-    assert vless["dest"] == "www.microsoft.com:443"
+    assert vless["server_names"] == ["www.apple.com"]
+    assert vless["dest"] == "www.apple.com:443"
     assert len(vless["short_ids"][0]) == 8
     assert vless["fp"] == "chrome"
     assert vless["flow"] == "xtls-rprx-vision"

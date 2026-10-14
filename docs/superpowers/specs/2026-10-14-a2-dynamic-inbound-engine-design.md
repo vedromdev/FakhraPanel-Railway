@@ -96,7 +96,9 @@ CREATE TABLE inbounds (
 
    | id | protocol | port | transport | security |
    |----|----------|------|-----------|----------|
-   | `vless` | vless | **443** | tcp | **reality** (flow `xtls-rprx-vision`, generated x25519 keypair, serverNames/dest default `www.microsoft.com:443`, random shortId, fp `chrome`) |
+   | `vless` | vless | **443** | tcp | **reality** (flow `xtls-rprx-vision`, generated x25519 keypair, serverNames/dest default `www.apple.com:443`, random shortId, fp `chrome`) |
+
+   > **Amended 2026-10-14 (during T3 e2e):** the original default `www.microsoft.com:443` was changed to `www.apple.com:443` — xray-core 26.3.27 rejects Microsoft's TLS certificate record (>8192 bytes, XTLS/Xray-core#6356), so the REALITY handshake *always* fails with that target on the pinned version. `www.apple.com` was verified end-to-end (real client → REALITY tunnel → bytes). xray itself warns apple/iCloud targets "may get your IP blocked by the GFW" (China profile) — the field stays admin-editable and DEPLOY.md documents how to pick another target.
    | `vmess` | vmess | 10002 | ws (path `/`) | none |
    | `trojan` | trojan | 10003 | tcp | none — **documented warning**: trojan without TLS is plaintext-auth; admins should add a cert (`stream_settings_extra`) or move these users to REALITY |
    | `ss` | ss | 10004 | tcp | none (SS carries its own cipher) |
@@ -241,7 +243,7 @@ renders its native URI scheme; REALITY links carry `sni=<serverNames[0]>`,
 | Risk | Mitigation |
 |---|---|
 | Old links break on upgrade | Re-import once via account page or `/sub/<token>`; docs notice; B adds UX |
-| Default REALITY target (`www.microsoft.com`) unreachable from some regions | Field is admin-editable; docs say "pick a fast, reachable site your clients can also reach" |
+| Default REALITY target unreachable/broken for some regions (confirmed case: `www.microsoft.com` cert record >8192 bytes breaks xray 26.3.27 REALITY) | Field is admin-editable; shipped default changed to `www.apple.com:443` (verified working); docs say "pick a fast, reachable site your VPS and clients can both reach, and verify with a real client connect" |
 | Trojan default runs without TLS | Documented loudly; admins add certs via `stream_settings_extra` or move users to REALITY |
 | Host networking is Linux-only | `vps` service is VPS-only by definition; local Mac keeps the `panel` service |
 | Bind probe vs host-network differences | Probe runs inside the same network namespace the process will bind — accurate in both modes |

@@ -120,8 +120,8 @@ def _seed_inbounds() -> list[tuple]:
             "flow": "xtls-rprx-vision",
             "private_key": private_key,
             "public_key": public_key,
-            "server_names": ["www.microsoft.com"],
-            "dest": "www.microsoft.com:443",
+            "server_names": ["www.apple.com"],
+            "dest": "www.apple.com:443",
             "short_ids": [secrets.token_hex(4)],
             "fp": "chrome",
         }

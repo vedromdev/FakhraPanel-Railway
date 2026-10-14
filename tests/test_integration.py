@@ -8,6 +8,7 @@ the image. Run the whole file for real with:
 """
 
 import base64
+import json
 import os
 import socket
 import subprocess
@@ -32,7 +33,7 @@ pytest.importorskip(
 from panel import bootstrap, db
 from panel.caddy import render_caddyfile
 from panel.config import Settings
-from panel.paths import PORTS, vpn_path
+from panel.paths import PORTS
 from panel.xray.config_builder import write_config
 from panel.xray.stats import StatsClient
 
@@ -302,28 +303,21 @@ def _start_echo_server(port: int) -> threading.Thread:
 
 @pytest.mark.integration
 @requires_container
-def test_ws_upgrade_reaches_xray(stack):
-    """Review Focus #2: a WS upgrade on /ray-<token>/vless gets 101 from the
-    real xray inbound, fronted by real caddy (auth happens after upgrade)."""
-    client = _admin_client(stack)
-    user = _create_user(client, "vless")  # applies config; inbound now exists
-    assert user["uuid"]
-    path = vpn_path(stack.token, "vless")
-    assert _upgrade_reaches_xray(stack.caddy_port, path)
+def test_ws_upgrade_direct_port(stack):
+    """A2 topology: xray owns its VPN ports directly. A WS upgrade on the
+    vmess seed's own port (path /) gets 101 from real xray — no caddy in
+    the path (auth happens after the upgrade)."""
+    assert _upgrade_reaches_xray(PORTS["vmess"], "/")
 
 
 @pytest.mark.integration
 @requires_container
-def test_dashboard_and_vpn_share_one_port(stack):
-    """The same caddy listener answers both the VPN 101 and panel requests."""
+def test_panel_via_caddy_and_vpn_on_direct_port(stack):
+    """Caddy fronts only the dashboard; VPN ports are xray's own."""
     client = _admin_client(stack)
-    _create_user(client, "vless")
-    # VPN traffic on this port...
-    assert _upgrade_reaches_xray(stack.caddy_port,
-                                 vpn_path(stack.token, "vless"))
-    # ...and the dashboard, on the very same listener.
     page = client.get("/", follow_redirects=False)
     assert page.status_code in (200, 302), page.text
+    assert _upgrade_reaches_xray(PORTS["vmess"], "/")
 
 
 @pytest.mark.integration
@@ -364,13 +358,13 @@ def test_user_traffic_counts_real_bytes(stack):
     the client; the per-user counter must exceed 0 — this empirically locks
     the `user>>>{email}>>>traffic>>>up|downlink` literal in stats.py."""
     client = _admin_client(stack)
-    user = _create_user(client, "vless")
+    user = _create_user(client, "vmess")  # lands on the vmess seed inbound
 
     echo_port = _free_port()
     _start_echo_server(echo_port)
 
-    # Client xray: dokodemo-door TCP listener -> vless-ws outbound to the
-    # panel's real inbound. Connecting to client_port tunnels to the echo.
+    # Client xray: dokodemo-door TCP listener -> vmess-ws outbound to the
+    # seed inbound's OWN port. Connecting to client_port tunnels to the echo.
     client_port = _free_port()
     client_config = {
         "log": {"loglevel": "error"},
@@ -381,24 +375,21 @@ def test_user_traffic_counts_real_bytes(stack):
             "settings": {"address": "127.0.0.1", "port": echo_port},
         }],
         "outbounds": [{
-            "protocol": "vless",
+            "protocol": "vmess",
             "settings": {
                 "vnext": [{
                     "address": "127.0.0.1",
-                    "port": PORTS["vless"],
-                    "users": [{"id": user["uuid"], "encryption": "none"}],
+                    "port": PORTS["vmess"],
+                    "users": [{"id": user["uuid"], "alterId": 0,
+                               "security": "auto"}],
                 }]
             },
             "streamSettings": {
                 "network": "ws",
                 "security": "none",
-                # The panel's inbound sets headers.Host = PUBLIC_HOST and
-                # Xray 26 filters on it; real clients dial PUBLIC_HOST, so
-                # the host header must match here too.
-                "wsSettings": {
-                    "path": vpn_path(stack.token, "vless"),
-                    "host": "localhost",
-                },
+                # The seed inbound sets headers.Host = PUBLIC_HOST; the
+                # client must send the same host header.
+                "wsSettings": {"path": "/", "host": "localhost"},
             },
         }],
     }
@@ -464,6 +455,97 @@ def test_user_traffic_counts_real_bytes(stack):
     )
     # provenance for the report: the real counter value this run observed
     print(f"observed per-user counter: {total} bytes")
+
+
+@pytest.mark.integration
+@requires_container
+def test_reality_e2e_client_connect(stack):
+    """Spec §10 headline: a real xray client connects to the REALITY inbound
+    (seeded vless on :443) and pulls real bytes through it."""
+    client = _admin_client(stack)
+    user = _create_user(client, "vless")  # auto-assigned to the vless seed
+    seed = json.loads(db.get_inbound("vless")["settings"])
+
+    echo_port = _free_port()
+    _start_echo_server(echo_port)
+
+    client_port = _free_port()
+    client_config = {
+        "log": {"loglevel": "error"},
+        "inbounds": [{
+            "listen": "127.0.0.1",
+            "port": client_port,
+            "protocol": "dokodemo-door",
+            "settings": {"address": "127.0.0.1", "port": echo_port},
+        }],
+        "outbounds": [{
+            "protocol": "vless",
+            "settings": {
+                "vnext": [{
+                    "address": "127.0.0.1",
+                    "port": 443,
+                    "users": [{"id": user["uuid"], "encryption": "none",
+                               "flow": "xtls-rprx-vision"}],
+                }]
+            },
+            "streamSettings": {
+                "network": "tcp",
+                "security": "reality",
+                "realitySettings": {
+                    "serverName": seed["server_names"][0],
+                    "fingerprint": seed.get("fp", "chrome"),
+                    "publicKey": seed["public_key"],
+                    "shortId": seed["short_ids"][0],
+                },
+            },
+        }],
+    }
+    client_config_path = stack.data_dir / "xray-reality-client.json"
+    write_config(client_config_path, client_config)
+    client_log_path = stack.data_dir / "xray-reality-client.out"
+    client_log = open(client_log_path, "w")
+    xray_client = subprocess.Popen(
+        [stack.xray_bin, "run", "-c", str(client_config_path)],
+        start_new_session=True,
+        stdout=client_log,
+        stderr=subprocess.STDOUT,
+    )
+    try:
+        assert _wait_for_port(client_port, timeout_s=10), (
+            "reality client xray did not listen"
+        )
+        banner_received = False
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            try:
+                with socket.create_connection(
+                    ("127.0.0.1", client_port), timeout=2
+                ) as sock:
+                    sock.settimeout(2)
+                    if sock.recv(64).startswith(b"HELLO-FROM-ECHO"):
+                        banner_received = True
+                        break
+            except OSError:
+                pass
+            time.sleep(0.5)
+    finally:
+        try:  # start_new_session -> pgid == pid
+            os.killpg(xray_client.pid, 15)
+        except ProcessLookupError:
+            pass
+        try:
+            xray_client.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(xray_client.pid, 9)
+            xray_client.wait()
+        client_log.close()
+
+    assert banner_received, (
+        "REALITY-tunneled traffic never reached the echo server; "
+        "client xray log:\n" + client_log_path.read_text()
+        + "\nserver xray log:\n"
+        + (stack.data_dir / "xray" / "xray.log").read_text()
+    )
 
 
 # --- entrypoint lifecycle: runs anywhere (bash + python, fake caddy) -------

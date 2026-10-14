@@ -58,8 +58,8 @@ def _reality_settings() -> dict:
         "transport": "tcp", "security": "reality",
         "flow": "xtls-rprx-vision",
         "private_key": private_key, "public_key": public_key,
-        "server_names": ["www.microsoft.com"],
-        "dest": "www.microsoft.com:443", "short_ids": ["abcd1234"],
+        "server_names": ["www.apple.com"],
+        "dest": "www.apple.com:443", "short_ids": ["abcd1234"],
         "fp": "chrome",
     }
 
@@ -125,8 +125,8 @@ def test_build_config_renders_all_seed_inbounds():
     vless = by_tag["in-vless"]["streamSettings"]
     assert vless["network"] == "tcp"
     assert vless["security"] == "reality"
-    assert vless["realitySettings"]["serverNames"] == ["www.microsoft.com"]
-    assert vless["realitySettings"]["dest"] == "www.microsoft.com:443"
+    assert vless["realitySettings"]["serverNames"] == ["www.apple.com"]
+    assert vless["realitySettings"]["dest"] == "www.apple.com:443"
     assert vless["realitySettings"]["spiderX"] == "/"
     ws = by_tag["in-vmess"]["streamSettings"]
     assert ws["network"] == "ws" and ws["security"] == "none"
@@ -148,8 +148,8 @@ def test_stream_settings_matrix():
                                             "privateKeyFile": "/c/key.pem"}]}}),
         ("tcp-reality", reality,
          {"network": "tcp", "security": "reality",
-          "realitySettings": {"dest": "www.microsoft.com:443",
-                              "serverNames": ["www.microsoft.com"],
+          "realitySettings": {"dest": "www.apple.com:443",
+                              "serverNames": ["www.apple.com"],
                               "privateKey": reality["private_key"],
                               "shortIds": ["abcd1234"], "spiderX": "/"}}),
         ("ws-none", {"transport": "ws", "security": "none", "path": "/p"},
