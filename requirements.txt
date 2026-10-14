@@ -7,3 +7,6 @@ python-multipart==0.0.32
 bcrypt==5.0.0
 qrcode[pil]==8.2
 grpcio==1.84.0
+# direct runtime import (panel/xray/pb/command_pb2.py); previously only
+# arrived transitively via grpcio-tools in requirements-dev.txt
+protobuf==7.36.2
