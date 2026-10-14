@@ -100,8 +100,9 @@ Service → **Variables** → add:
 
 Notes:
 
-- `ADMIN_PASSWORD` is **required**: the panel fails fast at startup without it
-  (no default password ever runs).
+- `ADMIN_USERNAME` / `ADMIN_PASSWORD` default to `admin`/`admin` when unset
+  (the panel logs a boot warning) — **set a long random password** before the
+  service is public: `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`.
 - `PUBLIC_HOST` is **required for links**: if blank the panel logs an
   **ERROR at boot** (see `docker logs` / the deployment log) and
   share-link/QR generation returns 500 until it's set.
@@ -225,11 +226,11 @@ step, set `PUBLIC_HOST` to an address your client device can actually reach —
 
 ## What was actually verified in this repo
 
-- `python3 -m pytest tests/ -v` → **133 passed, 5 skipped** (5 skips are the
+- `python3 -m pytest tests/ -v` → **134 passed, 5 skipped** (5 skips are the
   Docker-only integration tests) — includes the AUTO_TLS Caddyfile rendering
-  and fail-fast tests.
+  and default-credential tests.
 - `docker compose build test && docker compose run --rm test` →
-  **138 passed** (real Caddy + panel + real Xray: WS `101` upgrade on
+  **139 passed** (real Caddy + panel + real Xray: WS `101` upgrade on
   `/ray-<token>/<proto>`, one port serving both dashboard and VPN, real
   `xray run -test`, gRPC stats roundtrip with real traffic bytes).
 - Local container smoke checks (`docker compose up panel`):

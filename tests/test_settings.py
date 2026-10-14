@@ -1,7 +1,7 @@
+import logging
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
 from panel.config import Settings
 
@@ -30,22 +30,30 @@ def test_auto_tls_defaults_off_and_accepts_env_style_override():
     assert _settings(AUTO_TLS=True).AUTO_TLS is True
 
 
-def test_missing_admin_password_fails_fast(monkeypatch):
-    # Hermetic: neither the ambient .env (README's own dev flow creates one)
-    # nor ambient shell env may satisfy the required fields. _env_file=None
-    # disables the model's env_file=".env"; delenv removes the shell vars.
+def test_admin_credentials_default_to_admin_admin(monkeypatch):
+    # Hermetic: neither the ambient .env nor shell env may provide the
+    # fields. _env_file=None disables the model's env_file=".env"; delenv
+    # removes the shell vars. The panel must now boot with admin/admin.
     monkeypatch.delenv("ADMIN_USERNAME", raising=False)
     monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
-    with pytest.raises(ValidationError) as excinfo:
-        Settings(_env_file=None)
-    assert "ADMIN_PASSWORD" in str(excinfo.value)
+    settings = Settings(_env_file=None)
+    assert settings.ADMIN_USERNAME == "admin"
+    assert settings.ADMIN_PASSWORD == "admin"
 
 
-def test_missing_admin_username_fails_fast(monkeypatch):
-    # Same hermetic guard for the other required field (spec §8: both are
-    # required; the panel must fail fast on either).
+def test_default_admin_password_logs_warning(monkeypatch, caplog):
+    # Booting on the default password must say so out loud — the docs tell
+    # users to change it before exposing the host.
     monkeypatch.delenv("ADMIN_USERNAME", raising=False)
     monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
-    with pytest.raises(ValidationError) as excinfo:
+    with caplog.at_level(logging.WARNING, logger="panel.config"):
         Settings(_env_file=None)
-    assert "ADMIN_USERNAME" in str(excinfo.value)
+    assert "default admin/admin" in caplog.text
+
+
+def test_overridden_admin_password_is_silent(caplog):
+    # An explicit password (the documented install paths) warns about
+    # nothing.
+    with caplog.at_level(logging.WARNING, logger="panel.config"):
+        _settings()
+    assert "default admin/admin" not in caplog.text

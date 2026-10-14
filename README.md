@@ -131,9 +131,9 @@ python3 -m pytest tests/ -v
 ```
 
 > **Note:** run the suite **before** creating your `.env` (or move it aside).
-> `test_missing_admin_password_fails_fast` asserts that a bare `Settings()`
-> fails without `ADMIN_PASSWORD`, and pydantic-settings would read a local
-> `.env` if present — on a fresh clone (no `.env`) the suite is green.
+> pydantic-settings reads a local `.env` if present, and ambient values
+> (e.g. `AUTO_TLS=true`) would leak into the hermetic tests — on a fresh
+> clone (no `.env`) the suite is green.
 
 ```bash
 # full gate (real container: Caddy + panel + real xray, WS upgrade, gRPC stats)
@@ -167,7 +167,7 @@ Service → **Variables** → add:
 | Variable | Value |
 |---|---|
 | `ADMIN_USERNAME` | your admin login name |
-| `ADMIN_PASSWORD` | **required** — long random value: `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` (the panel fails fast at startup without it) |
+| `ADMIN_PASSWORD` | long random value: `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` — defaults to `admin` if unset (boot warning), so set it before the service is public |
 | `PUBLIC_HOST` | `<your-app>.railway.app` — you'll fill this in during step 4 |
 | `SECRET_KEY` | optional — session-signing key; leave blank to auto-generate and persist it in the DB |
 
