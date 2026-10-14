@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from panel import auth, db, links
+from panel import auth, db, inbounds, links
 from panel.constants import DEFAULT_SS_METHOD
 
 logger = logging.getLogger(__name__)
@@ -51,6 +51,7 @@ def _validate_password(password: str) -> None:
 class UserCreate(BaseModel):
     username: str = Field(pattern=USERNAME_RE)
     protocol: Literal["vless", "vmess", "trojan", "ss"]
+    inbound_id: str | None = None  # None -> the protocol's default inbound
     expiry_days: int | None = Field(default=None, ge=1, le=3650)
     quota_gb: float | None = Field(default=None, ge=0.001, le=100000)
     note: str = ""
@@ -68,6 +69,7 @@ class UserBulk(BaseModel):
     prefix: str = Field(pattern=USERNAME_RE)
     count: int = Field(ge=1, le=100)
     protocol: Literal["vless", "vmess", "trojan", "ss"]
+    inbound_id: str | None = None  # resolved once, applied to every row
     expiry_days: int | None = Field(default=None, ge=1, le=3650)
     quota_gb: float | None = Field(default=None, ge=0.001, le=100000)
     note: str = ""
@@ -116,6 +118,7 @@ def _new_row(
     expires_at: str | None,
     quota_gb: float | None,
     note: str,
+    inbound_id: str,
 ) -> dict:
     """Build one user row; protocol fields are NEVER null for a created user."""
     return {
@@ -134,7 +137,18 @@ def _new_row(
         "quota_gb": quota_gb,
         "note": note,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "inbound_id": inbound_id,
     }
+
+
+def _resolve_inbound(protocol: str, requested: str | None) -> str:
+    """Default/explicit inbound pick; ValueError becomes a 400."""
+    try:
+        return inbounds.resolve_inbound_id(
+            protocol, requested, db.list_inbounds()
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 def _get_or_404(user_id: str) -> dict:
@@ -189,6 +203,7 @@ def create_user(body: UserCreate, request: Request):
         _expiry_iso(body.expiry_days),
         body.quota_gb,
         body.note,
+        _resolve_inbound(body.protocol, body.inbound_id),
     )
     try:
         user = db.create_user(row)
@@ -212,9 +227,10 @@ def bulk_create_users(body: UserBulk, request: Request):
         return _conflict_response(conflicts)
 
     expires_at = _expiry_iso(body.expiry_days)
+    inbound_id = _resolve_inbound(body.protocol, body.inbound_id)
     rows = [
         _new_row(name, body.protocol, secrets.token_urlsafe(16), expires_at,
-                 body.quota_gb, body.note)
+                 body.quota_gb, body.note, inbound_id)
         for name in usernames
     ]
     try:

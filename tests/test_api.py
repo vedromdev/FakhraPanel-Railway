@@ -389,3 +389,80 @@ def test_stats_counts_and_sums(auth_client):
         "used_bytes_total": 1234,
         "quota_bytes_total": 2.5e9,
     }
+
+
+# --- Task 7: inbound auto-assign --------------------------------------------
+
+
+def _add_inbound(settings, inbound_id, protocol, port):
+    """Insert an inbound row directly (the CRUD API lands in Task 5)."""
+    import sqlite3
+    from datetime import datetime, timezone
+
+    conn = sqlite3.connect(settings.data_dir() / "panel.db")
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO inbounds (id, protocol, port, settings, created_at)"
+                " VALUES (?, ?, ?, '{}', ?)",
+                (inbound_id, protocol, port, datetime.now(timezone.utc).isoformat()),
+            )
+    finally:
+        conn.close()
+
+
+def _disable_protocol(settings, protocol):
+    import sqlite3
+
+    conn = sqlite3.connect(settings.data_dir() / "panel.db")
+    try:
+        with conn:
+            conn.execute(
+                "UPDATE inbounds SET enabled = 0 WHERE protocol = ?", (protocol,)
+            )
+    finally:
+        conn.close()
+
+
+def test_create_user_auto_assigns_inbound(auth_client):
+    response = _create(auth_client)
+
+    assert response.status_code == 201
+    assert response.json()["user"]["inbound_id"] == "vless"  # seeded default
+
+
+def test_create_user_explicit_inbound_id(auth_client, settings):
+    _add_inbound(settings, "vless-b", "vless", 20001)
+
+    response = _create(auth_client, inbound_id="vless-b")
+
+    assert response.status_code == 201
+    assert response.json()["user"]["inbound_id"] == "vless-b"
+
+
+def test_create_user_wrong_protocol_inbound_400(auth_client):
+    response = _create(auth_client, inbound_id="vmess")
+
+    assert response.status_code == 400
+    assert "detail" in response.json()
+
+
+def test_create_user_no_enabled_inbound_400(auth_client, settings):
+    _disable_protocol(settings, "vless")
+
+    response = _create(auth_client)
+
+    assert response.status_code == 400
+    assert "vless" in response.json()["detail"]
+
+
+def test_bulk_create_assigns_default_inbound(auth_client):
+    response = auth_client.post(
+        "/api/users/bulk",
+        json={"prefix": "crew", "count": 3, "protocol": "vless"},
+    )
+
+    assert response.status_code == 201
+    users = response.json()["users"]
+    assert len(users) == 3
+    assert all(u["inbound_id"] == "vless" for u in users)
