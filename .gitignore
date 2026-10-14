@@ -9,3 +9,10 @@ data/
 
 __pycache__/
 .env
+
+# Local tooling / agent workspace
+.superpowers/
+.venv/
+.pytest_cache/
+*.pyc
+.DS_Store

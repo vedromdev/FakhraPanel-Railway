@@ -1,0 +1,13 @@
+services:
+  panel:
+    build: .
+    ports:
+      - "8080:8080"
+    env_file: .env
+    volumes:
+      - ./data:/data
+  test:
+    build: .
+    command: python3 -m pytest tests/ -v
+    environment:
+      IN_DOCKER: "1"
