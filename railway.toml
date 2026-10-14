@@ -8,10 +8,11 @@
 #  restart-policy = on_failure" maps onto these schema keys; the schema names
 #  are the ones Railway actually reads.)
 #
-# Note: Railway is deprecating Config as Code for brand-new services. If your
-# service ignores this file, set the same three values in the service Settings
-# (healthcheck path /api/health, healthcheck timeout 30 s, restart policy
-# on-failure) — see DEPLOY.md.
+# Note: Railway is deprecating Config as Code — hard cutoff 2026-12-01.
+# Existing services read this file until then; NEW services cannot opt in and
+# never read it at all. For those, set the same three values in the service
+# Settings instead (healthcheck path /api/health, timeout 30 s, restart
+# policy on-failure) — the primary path documented in DEPLOY.md §5.
 
 [deploy]
 healthcheckPath = "/api/health"

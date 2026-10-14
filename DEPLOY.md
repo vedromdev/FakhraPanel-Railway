@@ -22,8 +22,8 @@ Service → **Variables** → add:
 |---|---|
 | `ADMIN_USERNAME` | your admin login name |
 | `ADMIN_PASSWORD` | long random value — `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` |
-| `SECRET_KEY` | same command, different value (session signing) |
-| `ENV` | `production` |
+| `SECRET_KEY` | *optional* — session-signing key: when set, session tokens are signed with it; rotating it logs all users out. Leave blank to auto-generate (persisted in the DB at `DATA_DIR`) — works fine out of the box |
+| `ENV` | *optional* — reserved for spec compatibility, currently unused by the code |
 | `PUBLIC_HOST` | `<your-app>.railway.app` — see step 4 |
 
 Notes:
@@ -31,8 +31,8 @@ Notes:
 - `ADMIN_PASSWORD` is **required**: the panel fails fast at startup without it
   (no default password ever runs).
 - `PUBLIC_HOST` is **required for links**: if blank the panel logs an
-  error-level warning at boot and share-link/QR generation returns 500 until
-  it's set.
+  **ERROR at boot** (see `docker logs` / the deployment log) and
+  share-link/QR generation returns 500 until it's set.
 - Leave the rest alone: Railway injects `PORT`; the panel defaults to
   `DATA_DIR=/data` (your volume), `XRAY_BIN=xray` (baked into the image),
   `COOKIE_SECURE=true` (correct for the HTTPS edge).
@@ -58,7 +58,15 @@ restart the service. Share links always point at `<PUBLIC_HOST>:443` with
 
 ## 5. Healthcheck & restart policy
 
-[`railway.toml`](railway.toml) pins:
+**Primary path — works for every service, including new ones:** set these
+three values in the service **Settings**:
+
+- Healthcheck path: `/api/health` (must return 2xx before traffic shifts)
+- Healthcheck timeout: `30` seconds
+- Restart policy: **on failure**
+
+**Legacy alternative — Config as Code:** [`railway.toml`](railway.toml)
+carries the same three values:
 
 ```toml
 [deploy]
@@ -67,10 +75,10 @@ healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
 ```
 
-Caveat: Railway is deprecating Config as Code, and **new services cannot opt
-into `railway.toml`**. If your service ignores the file, set the same three
-values in the service **Settings** (healthcheck path `/api/health`, healthcheck
-timeout 30 s, restart policy *on failure*) — same behavior either way.
+Railway is deprecating Config as Code with a **hard cutoff of 2026-12-01**:
+existing files keep working until then, and **new services cannot opt in at
+all** — they never read `railway.toml`. Prefer the dashboard settings above
+unless your service already has Config as Code enabled.
 
 ## 6. Deploy and verify
 

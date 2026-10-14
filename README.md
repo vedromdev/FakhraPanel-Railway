@@ -107,6 +107,7 @@ docker compose build test && docker compose run --rm test
 
 See **[DEPLOY.md](DEPLOY.md)** for the Railway walkthrough (env vars, the
 `/data` volume, healthcheck, and the manual E2E checklist), and
-[`.env.example`](.env.example) for every environment variable the panel reads.
+[`.env.example`](.env.example) for every environment variable you need to
+configure.
 
 Repository: <https://github.com/vedromdev/FakhraPanel-Railway>
